@@ -1,0 +1,181 @@
+surface_form,search_arg,kind,pos_filter,ambiguity_flag,idiom_family,notes
+Insan*,insan,stem,,low,,"Prefix catches insane, insanely, insanity, insanities."
+Mad*,mad,stem,JJ,high,,POS filter to adjectives; drops madam/made/Madison. Loses noun senses -- see madman/madhouse rows.
+madman,madman,stem,,low,,Also catches madmen; distinct from 'mad' + POS filter.
+madhouse,madhouse,stem,,low,,Also catches madhouses.
+madness,madness,stem,,low,,
+Lunatic,lunatic,stem,,low,,"Catches lunatic, lunatics, lunatical."
+Lunacy,lunac,stem,,low,,"Catches lunacy, lunacies."
+Mental,mental,stem,,med,,"Catches mental, mentally, mentality; some non-target uses ('mental arithmetic')."
+disorder,disorder,stem,,med,,"Catches disorder, disorders, disordered; some non-medical usage."
+Ill,ill,stem,JJ,high,,POS filter to adjectives to drop illegal/illicit/illustrious. Still noisy; audit.
+illness,illness,stem,,low,,"Catches illness, illnesses."
+deficiency,deficien,stem,,low,,"Catches deficiency, deficient, deficiencies."
+derangement,derange,stem,,low,,"Catches derange, deranged, derangement, derangements."
+Nervous,nervous,stem,,low,,
+Demented/Dementia,dement,stem,,low,,"Catches demented, dementia, dementing, dementias."
+Crazy/craziness,craz,stem,,low,,"Catches crazy, crazier, craziest, craziness, crazed. Some 'crazing' (pottery)."
+Asylum,asylum,stem,,low,,
+Mental hospital,mental hospital,phrase,,low,,
+Hospital,hospital,stem,,high,,Retained despite genericness -- 'hospital' itself has documented semantic drift 1820-now.
+Mental institution,mental institution,phrase,,low,,
+Institution,institution,stem,,high,,Generic; sub-cluster analysis may reveal mental-health portion.
+Sanitarium,sanitarium,stem,,low,,
+Sanatorium,sanatorium,stem,,low,,
+Retreat,retreat,stem,,high,,Military and general senses dominate; sub-cluster analysis may isolate asylum sense.
+Hospital for the insane,hospital for the insane,phrase,,low,,
+State hospital,state hospital,phrase,,low,,
+Bedlam,bedlam,stem,,low,,Historically the specific asylum; later generic 'chaos'.
+Idiot,idiot,stem,,low,,"Catches idiot, idiots, idiotic, idiotical."
+Idiocy,idiocy,stem,,low,,
+Imbecile,imbecile,stem,,low,,"Catches imbecile, imbeciles, imbecility, imbecilic."
+Feeble-minded,feeble-minded,stem,,low,,Depends on COHA tokenization of hyphens; verify with a spot query.
+Feeble minded (two-token),feeble minded,phrase,,low,,Backup form if COHA splits on hyphen.
+Feeblemindedness,feebleminded,stem,,low,,
+Moron/Moronic,moron,stem,,low,,"Catches moron, morons, moronic, moronism."
+Cretin/Cretinism,cretin,stem,,low,,
+Mental retardation,mental retardation,phrase,,low,,
+Retard,retard,stem,,med,,Pre-20thc verb sense 'to slow' also present; clinical/pejorative sense emerges over time -- exactly the drift signal.
+Mental deficiency,mental deficiency,phrase,,low,,
+Mentally defective,mentally defective,phrase,,low,,
+Congenital deficiency,congenital deficiency,phrase,,low,,
+Melancholia/Melancholy,melanchol,stem,,low,,"Catches melancholy, melancholic, melancholia, melancholics."
+Monomania,monomania,stem,,low,,
+Circular insanity,circular insanity,phrase,,low,,
+Mania,mania,stem,,low,,"Catches mania, manias, maniac, maniacal, maniacally."
+Manic,manic,stem,,low,,
+Manic-depressive insanity,manic-depressive insanity,phrase,,low,,Hyphenation tokenization matters; also try 'manic depressive insanity' as backup.
+Manic depressive insanity (two-token),manic depressive insanity,phrase,,low,,
+Hypochondria/Hypochondriasis,hypochondri,stem,,low,,
+Neurasthenia,neurasthen,stem,,low,,"Catches neurasthenia, neurasthenic, neurasthenics."
+Psychasthenia,psychasthen,stem,,low,,
+Hysteria,hysteri,stem,,low,,"Catches hysteria, hysterical, hysterics, hysteric."
+Paranoia,paranoi,stem,,low,,"Catches paranoia, paranoid, paranoiac."
+Psychosis,psychos,stem,,med,,Also catches psychosomatic; consider narrowing to 'psychosis' / 'psychotic' if noise.
+Psychotic,psychotic,stem,,low,,
+Schizophrenia,schizophren,stem,,low,,"Catches schizophrenia, schizophrenic, schizophrenics."
+Dementia praecox,dementia praecox,phrase,,low,,
+Brain fever,brain fever,phrase,,low,,
+Cerebral disease,cerebral disease,phrase,,low,,
+Degeneration,degener,stem,,low,,"Catches degeneration, degenerate, degenerative, degeneracy."
+Delusion,delusion,stem,,low,,
+Delusional insanity,delusional insanity,phrase,,low,,
+Hallucination,hallucin,stem,,low,,"Catches hallucination, hallucinate, hallucinatory, hallucinogenic."
+Obsession,obsess,stem,,low,,"Catches obsession, obsessive, obsessed, obsesses."
+Shell shock,shell shock,phrase,,low,,"Also catches 'shell shocks', 'shell shocked' via prefix on slot 2."
+Battle fatigue,battle fatigue,phrase,,low,,
+Combat neurosis,combat neurosis,phrase,,low,,
+War neurosis,war neurosis,phrase,,low,,
+Soldier's heart (hyphen tokenization),soldier's heart,phrase,,med,,Verify tokenization of apostrophe with a spot query.
+Soldiers heart (no apostrophe),soldiers heart,phrase,,med,,Backup if COHA splits 'soldier's' into three tokens.
+Railway spine,railway spine,phrase,,low,,
+Traumatic neurosis,traumatic neurosis,phrase,,low,,
+Brain fag,brain fag,phrase,,low,,
+Brain fog,brain fog,phrase,,low,,
+Brain storm,brain storm,phrase,,med,,Modern 'brainstorm' (one word) is a different sense; matter for drift analysis.
+Nervous prostration,nervous prostration,phrase,,low,,
+prostration,prostration,stem,,med,,Also has religious/physical-exhaustion senses.
+breakdown,breakdown,stem,,med,,Mechanical breakdown dominates in some genres.
+Collapse,collapse,stem,,high,,Physical/structural senses dominate; sub-cluster analysis expected to isolate medical sense.
+Exhaustion,exhaustion,stem,,med,,
+Debility,debility,stem,,low,,
+Irritability,irritability,stem,,low,,
+The blues,the blues,phrase,,med,,Music sense grows over 20thc.
+Chronic blues,chronic blues,phrase,,low,,
+Despondency,despondenc,stem,,low,,
+Profound despondency,profound despondency,phrase,,low,,
+Mental depression,mental depression,phrase,,low,,
+Low spirits,low spirits,phrase,,low,,
+Anxiety,anxiet,stem,,low,,"Catches anxiety, anxieties."
+Depressive,depressive,stem,,low,,
+depression,depression,stem,,med,,Economic-depression sense dominates certain decades -- itself an interesting drift signal.
+PTSD,ptsd,stem,,low,,
+Post-traumatic stress disorder,post-traumatic stress disorder,phrase,,low,,Hyphen tokenization; also try 'post traumatic stress disorder'.
+Post traumatic stress disorder,post traumatic stress disorder,phrase,,low,,
+Bipolar,bipolar,stem,,low,,
+Autism,autis,stem,,low,,"Catches autism, autistic, autistics; note pre-1943 sense (Bleuler) differs."
+Borderline personality disorder,borderline personality disorder,phrase,,low,,
+Excited delirium,excited delirium,phrase,,low,,
+Condition,condition,stem,,high,,Very generic; sub-cluster analysis may isolate medical/mental sense.
+Storm,storm,stem,,high,,Weather dominates; retained mainly for 'brain storm' phrase.
+Nerves,nerves,stem,,med,,
+complaint,complaint,stem,,med,,Historical medical usage ('nervous complaint') distinct from grievance sense.
+Temperament,temperament,stem,,med,,
+The vapors,the vapors,phrase,,low,,
+The vapours,the vapours,phrase,,low,,British spelling variant.
+Spells,spells,stem,,high,,Magic/weather/duration senses dominate.
+Attacks,attacks,stem,,high,,Military/general senses dominate.
+Fits,fits,stem,NN,high,,POS filter to noun forms drops the 'it fits' verb sense.
+Brain trouble,brain trouble,phrase,,low,,
+Head trouble,head trouble,phrase,,low,,
+Affliction,affliction,stem,,low,,
+Berserk,berserk,stem,,low,,
+Fury,fury,stem,,low,,
+Furious,furious,stem,,low,,
+Raving,raving,stem,,low,,"Often collocates with 'mad', 'lunatic'."
+Violent,violent,stem,,high,,Very common; retained for its position in the semantic field.
+Dangerous to self,dangerous to self,phrase,,low,,
+Suicidal tendency,suicidal tendency,phrase,,low,,
+Suicide,suicid,stem,,low,,"Catches suicide, suicides, suicidal."
+Queer,queer,stem,,low,,Paradigm case for cluster-structure drift (strange -> pejorative -> reclaimed).
+Odd,odd,stem,,high,,Numeric/odd-jobs senses dominate; sub-cluster analysis may isolate 'strange' sense.
+Peculiar,peculiar,stem,,med,,
+Strange,strange,stem,,high,,Very common; retained for semantic-field position.
+Disturbed,disturbed,stem,,med,,Also 'disturbed sleep/water' etc.
+Unhinged,unhinged,stem,,low,,
+Unbalanced,unbalanced,stem,,med,,Diet/budget senses coexist with mental sense.
+Touched,touched,stem,JJ,high,,POS filter to adjective isolates the 'touched (in the head)' predicative sense from verb 'touched'.
+Mad as a hatter,mad as a hatter,phrase,,low,,
+Not right in the head,not right in the head,phrase,,low,,
+Touched in the head,touched in the head,phrase,,low,,
+Queer in the head,queer in the head,phrase,,low,,
+Bereft of reason,bereft of reason,phrase,,low,,
+Want of understanding,want of understanding,phrase,,low,,
+Fits of insanity,fits of insanity,phrase,,low,,
+Devil to pay,devil to pay,phrase,,med,,Roget's synonym for madness but has other senses.
+Hell broke loose,hell broke loose,phrase,,med,,
+All the fat in the fire,all the fat in the fire,phrase,,low,,
+Pretty kettle of fish,pretty kettle of fish,phrase,,low,,
+Not quite right,not quite right,phrase,,med,,
+took leave of his senses,took leave of his senses,idiom_variant,,low,took_leave_of_senses,
+took leave of her senses,took leave of her senses,idiom_variant,,low,took_leave_of_senses,
+took leave of my senses,took leave of my senses,idiom_variant,,low,took_leave_of_senses,
+took leave of their senses,took leave of their senses,idiom_variant,,low,took_leave_of_senses,
+taken leave of his senses,taken leave of his senses,idiom_variant,,low,took_leave_of_senses,
+taken leave of her senses,taken leave of her senses,idiom_variant,,low,took_leave_of_senses,
+out of his mind,out of his mind,idiom_variant,,med,out_of_mind,'Out of X mind' has some non-idiomatic uses; audit.
+out of her mind,out of her mind,idiom_variant,,med,out_of_mind,'Out of X mind' has some non-idiomatic uses; audit.
+out of my mind,out of my mind,idiom_variant,,med,out_of_mind,'Out of X mind' has some non-idiomatic uses; audit.
+out of your mind,out of your mind,idiom_variant,,med,out_of_mind,'Out of X mind' has some non-idiomatic uses; audit.
+out of their mind,out of their mind,idiom_variant,,med,out_of_mind,'Out of X mind' has some non-idiomatic uses; audit.
+lost his reason,lost his reason,idiom_variant,,low,lost_reason,
+lost her reason,lost her reason,idiom_variant,,low,lost_reason,
+lost their reason,lost their reason,idiom_variant,,low,lost_reason,
+lost his wits,lost his wits,idiom_variant,,low,lost_wits,
+lost her wits,lost her wits,idiom_variant,,low,lost_wits,
+lost their wits,lost their wits,idiom_variant,,low,lost_wits,
+losing his wits,losing his wits,idiom_variant,,low,lost_wits,
+Alienist,alienist,stem,,low,,"Catches alienist, alienists."
+Mad-doctor,mad-doctor,stem,,low,,Depends on hyphen tokenization.
+Mad doctor (two-token),mad doctor,phrase,,low,,
+Asylum superintendent,asylum superintendent,phrase,,low,,
+Medical superintendent,medical superintendent,phrase,,low,,
+Superintendent,superintendent,stem,,high,,School/general senses dominate.
+Asylum keeper,asylum keeper,phrase,,low,,
+Matron,matron,stem,,med,,
+Keeper,keeper,stem,,high,,Very generic; retained mainly for phrase 'asylum keeper' coverage.
+Discharged,discharged,stem,,med,,"Also 'discharged gun', 'discharged debt'."
+Absconded,absconded,stem,,low,,
+Treatment,treatment,stem,,high,,Very generic; retained for its position in the clinical vocabulary.
+Inebriate,inebriat,stem,,low,,"Catches inebriate, inebriated, inebriety, inebriates."
+Criminal,criminal,stem,,high,,Very generic; retained for 'criminal insanity' co-occurrence.
+Trauma,trauma,stem,,med,,Physical trauma vs psychological trauma -- cluster split expected.
+Therapy,therapy,stem,,high,,Modern-dominated word; sparse in early decades.
+Religious fanaticism,religious fanaticism,phrase,,low,,
+Fanaticism,fanatic,stem,,low,,"Catches fanatic, fanatical, fanatically, fanaticism."
+Medium,medium,stem,,high,,Very generic; spiritualist sense is one sub-cluster.
+Mesmerism,mesmer,stem,,low,,"Catches mesmerism, mesmerist, mesmerize, mesmerizing."
+Seance,seance,stem,,low,,
+Séance (accented),séance,stem,,low,,Verify casefold behavior of accented characters in COHA.
+Revival,revival,stem,,high,,Religious/economic senses dominate.
+Spiritualism,spiritualism,stem,,low,,
