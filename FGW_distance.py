@@ -51,6 +51,7 @@ Requirements:
 import argparse
 
 import numpy as np
+from pathlib import Path
 from scipy.cluster.hierarchy import linkage, cophenet
 from scipy.spatial.distance import squareform
 from sklearn.metrics import pairwise_distances
@@ -70,6 +71,37 @@ def ultrametric_from_points(X: np.ndarray, metric: str = "cosine") -> np.ndarray
     Z = linkage(squareform(D, checks=False), method="single")
     return squareform(cophenet(Z))
 
+
+def load_or_build_ultrametric(source_file, X, metric="cosine"):
+    """
+    Load a cached ultrametric if available; otherwise compute and cache it.
+
+    Parameters
+    ----------
+    source_file : str or Path
+        The embedding/structure file associated with X. The ultrametric cache
+        is stored alongside it.
+    X : np.ndarray
+        Point cloud.
+    metric : str
+        Distance metric passed to ultrametric_from_points().
+    """
+    source_file = Path(source_file)
+
+    cache_file = source_file.with_name(
+        f"{source_file.stem}_ultrametric_{metric}.npy"
+    )
+
+    if cache_file.exists():
+        print(f"Loading cached ultrametric: {cache_file.name}")
+        return np.load(cache_file)
+
+    print(f"Building ultrametric: {cache_file.name}")
+    U = ultrametric_from_points(X, metric=metric)
+
+    np.save(cache_file, U)
+
+    return U
 
 # -- FGW COMPUTATION -------------------------------------------------------------
 
@@ -162,15 +194,17 @@ def compute_fgw(
     if use_struct:
         print(f"  Building ultrametric for corpus 1 (from struct, "
               f"{X_struct.shape}, metric={ult_metric})...")
-        UX = ultrametric_from_points(X_struct, metric=ult_metric)
+        UX = load_or_build_ultrametric(args.struct1, X_struct, ult_metric)
+        #UX = ultrametric_from_points(X_struct, metric=ult_metric)
         print(f"  Building ultrametric for corpus 2 (from struct, "
               f"{Y_struct.shape}, metric={ult_metric})...")
-        UY = ultrametric_from_points(Y_struct, metric=ult_metric)
+        UY = load_or_build_ultrametric(args.struct2, Y_struct, ult_metric)
+        # UY = ultrametric_from_points(Y_struct, metric=ult_metric)
     else:
         print(f"  Building ultrametric for corpus 1 (from emb, metric={ult_metric})...")
-        UX = ultrametric_from_points(X, metric=ult_metric)
+        UX = load_or_build_ultrametric(args.emb1, X, ult_metric)
         print(f"  Building ultrametric for corpus 2 (from emb, metric={ult_metric})...")
-        UY = ultrametric_from_points(Y, metric=ult_metric)
+        UY = load_or_build_ultrametric(args.emb2, Y, ult_metric)
 
     if normalize_scale:
         UX = UX / UX.max()
@@ -196,21 +230,25 @@ def compute_fgw(
         log=True,
     )
     fgw_cost = float(log["partial_fgw_dist"])
+    if args.diagnostics:
+        print("\nComputing diagnostic OT distances...")
+        # decomposition: feature-only and structure-only runs for context
+        print("  Baseline: partial Wasserstein (feature only)...")
+        _, log_w = ot.partial.partial_wasserstein(
+            p, q, M, m=mass_fraction, nb_dummies=nb_dummies,
+            numItermax=num_iter_max, log=True,
+        )
+        feat_cost = float(log_w["partial_w_dist"])
 
-    # decomposition: feature-only and structure-only runs for context
-    print("  Baseline: partial Wasserstein (feature only)...")
-    _, log_w = ot.partial.partial_wasserstein(
-        p, q, M, m=mass_fraction, nb_dummies=nb_dummies,
-        numItermax=num_iter_max, log=True,
-    )
-    feat_cost = float(log_w["partial_w_dist"])
-
-    print("  Baseline: partial GW (structure only)...")
-    _, log_gw = ot.gromov.partial_gromov_wasserstein(
-        UX, UY, p, q, m=mass_fraction, loss_fun="square_loss",
-        nb_dummies=nb_dummies, numItermax=num_iter_max, log=True,
-    )
-    struct_cost = float(log_gw["partial_gw_dist"])
+        print("  Baseline: partial GW (structure only)...")
+        _, log_gw = ot.gromov.partial_gromov_wasserstein(
+            UX, UY, p, q, m=mass_fraction, loss_fun="square_loss",
+            nb_dummies=nb_dummies, numItermax=num_iter_max, log=True,
+        )
+        struct_cost = float(log_gw["partial_gw_dist"])
+    else:
+        feat_cost = np.nan
+        struct_cost = np.nan
 
     # matches: mask rows that transport (almost) no mass under partial matching
     row_mass = T.sum(axis=1)
@@ -326,6 +364,9 @@ def parse_args():
                              "while 50000 converged reproducibly). A higher cap "
                              "costs nothing on small problems -- the solver still "
                              "exits early once converged.")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="Also compute baseline partial Wasserstein and partial" 
+                            "Gromov-Wasserstein distances.")
     parser.add_argument("--output", default="fgw_transport.png")
     return parser.parse_args()
 
