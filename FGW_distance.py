@@ -72,9 +72,27 @@ def ultrametric_from_points(X: np.ndarray, metric: str = "cosine") -> np.ndarray
     return squareform(cophenet(Z))
 
 
-def load_or_build_ultrametric(source_file, X, metric="cosine"):
+def load_or_build_ultrametric(source_file, X, metric="cosine", rebuild=False):
     """
     Load a cached ultrametric if available; otherwise compute and cache it.
+
+    The ultrametric is a pure function of (X, metric), and X is fully
+    determined by source_file, so caching on (stem, metric) is sound -- as
+    long as source_file itself hasn't changed underneath the cache. Two
+    guards enforce that, because a stale cache is silent and poisons every
+    downstream number:
+
+      1. mtime: if source_file is newer than the cache, rebuild. This is the
+         one that matters when you regenerate *_embeddings.npy after changing
+         the upstream cleaning -- the filename does not change, so without
+         this check you would keep scoring the OLD point cloud's hierarchy
+         against the NEW feature cost, and nothing would warn you.
+      2. shape: the cache must be (n, n) for n = len(X). Catches a source
+         file whose row count changed but whose mtime was preserved (copies,
+         restores, checkouts).
+
+    Pass rebuild=True (CLI: --rebuild-ultrametrics) to ignore the cache
+    entirely and overwrite it.
 
     Parameters
     ----------
@@ -85,6 +103,8 @@ def load_or_build_ultrametric(source_file, X, metric="cosine"):
         Point cloud.
     metric : str
         Distance metric passed to ultrametric_from_points().
+    rebuild : bool
+        Force recomputation even if a cache exists.
     """
     source_file = Path(source_file)
 
@@ -92,11 +112,23 @@ def load_or_build_ultrametric(source_file, X, metric="cosine"):
         f"{source_file.stem}_ultrametric_{metric}.npy"
     )
 
-    if cache_file.exists():
-        print(f"Loading cached ultrametric: {cache_file.name}")
-        return np.load(cache_file)
+    if cache_file.exists() and not rebuild:
+        reason = None
+        if cache_file.stat().st_mtime < source_file.stat().st_mtime:
+            reason = f"{source_file.name} is newer than the cache"
+        else:
+            U = np.load(cache_file)
+            expected = (X.shape[0], X.shape[0])
+            if U.shape != expected:
+                reason = f"cached shape {U.shape} != expected {expected}"
+            else:
+                print(f"  Loading cached ultrametric: {cache_file.name}")
+                return U
+        print(f"  Stale ultrametric cache ({reason}); rebuilding "
+              f"{cache_file.name}")
 
-    print(f"Building ultrametric: {cache_file.name}")
+    print(f"  Building ultrametric: {cache_file.name}  (n={X.shape[0]}, "
+          f"metric={metric})")
     U = ultrametric_from_points(X, metric=metric)
 
     np.save(cache_file, U)
@@ -108,6 +140,8 @@ def load_or_build_ultrametric(source_file, X, metric="cosine"):
 def compute_fgw(
     X: np.ndarray,
     Y: np.ndarray,
+    emb1_path: str,
+    emb2_path: str,
     mass_fraction: float = 0.8,
     alpha: float = 0.5,
     metric: str = "cosine",
@@ -116,7 +150,11 @@ def compute_fgw(
     num_iter_max: int = 50000,
     X_struct: np.ndarray | None = None,
     Y_struct: np.ndarray | None = None,
+    struct1_path: str | None = None,
+    struct2_path: str | None = None,
     struct_metric: str | None = None,
+    diagnostics: bool = False,
+    rebuild_ultrametrics: bool = False,
 ) -> dict:
     """
     Partial fused Gromov-Wasserstein between two embedding matrices that live
@@ -126,6 +164,20 @@ def compute_fgw(
         X, Y            : embeddings, shapes (n, d) and (m, d) with equal d.
                           Used for the cross-corpus feature cost M AND (by
                           default) for the within-corpus ultrametrics.
+        emb1_path,      : paths X and Y were loaded from. Used ONLY to site
+        emb2_path         and name the ultrametric cache next to its source.
+                          Passed explicitly rather than read off a global
+                          `args`, so compute_fgw stays importable and testable
+                          without the CLI.
+        struct1_path,   : as above, for the struct arrays. Required when
+        struct2_path      X_struct/Y_struct are given.
+        diagnostics     : also compute the feature-only and structure-only
+                          baselines. The structure-only (partial GW) baseline
+                          is the expensive one -- benchmarked at ~100x the
+                          fused solve, since pure GW gives the conditional
+                          gradient no feature term to descend. The
+                          feature-only baseline is ~free and always runs.
+        rebuild_ultrametrics : ignore any cached ultrametric and recompute.
         mass_fraction   : fraction of total mass to transport (0-1);
                           lower = more permissive partial matching
         alpha           : structure/feature trade-off (0 = feature only,
@@ -192,19 +244,26 @@ def compute_fgw(
     q = np.ones(m) / m
 
     if use_struct:
-        print(f"  Building ultrametric for corpus 1 (from struct, "
-              f"{X_struct.shape}, metric={ult_metric})...")
-        UX = load_or_build_ultrametric(args.struct1, X_struct, ult_metric)
-        #UX = ultrametric_from_points(X_struct, metric=ult_metric)
-        print(f"  Building ultrametric for corpus 2 (from struct, "
-              f"{Y_struct.shape}, metric={ult_metric})...")
-        UY = load_or_build_ultrametric(args.struct2, Y_struct, ult_metric)
-        # UY = ultrametric_from_points(Y_struct, metric=ult_metric)
+        if struct1_path is None or struct2_path is None:
+            raise ValueError(
+                "struct1_path and struct2_path are required when X_struct/"
+                "Y_struct are supplied -- they site the ultrametric cache."
+            )
+        print(f"  Corpus 1 ultrametric (from struct, {X_struct.shape}, "
+              f"metric={ult_metric})")
+        UX = load_or_build_ultrametric(struct1_path, X_struct, ult_metric,
+                                       rebuild=rebuild_ultrametrics)
+        print(f"  Corpus 2 ultrametric (from struct, {Y_struct.shape}, "
+              f"metric={ult_metric})")
+        UY = load_or_build_ultrametric(struct2_path, Y_struct, ult_metric,
+                                       rebuild=rebuild_ultrametrics)
     else:
-        print(f"  Building ultrametric for corpus 1 (from emb, metric={ult_metric})...")
-        UX = load_or_build_ultrametric(args.emb1, X, ult_metric)
-        print(f"  Building ultrametric for corpus 2 (from emb, metric={ult_metric})...")
-        UY = load_or_build_ultrametric(args.emb2, Y, ult_metric)
+        print(f"  Corpus 1 ultrametric (from emb, metric={ult_metric})")
+        UX = load_or_build_ultrametric(emb1_path, X, ult_metric,
+                                       rebuild=rebuild_ultrametrics)
+        print(f"  Corpus 2 ultrametric (from emb, metric={ult_metric})")
+        UY = load_or_build_ultrametric(emb2_path, Y, ult_metric,
+                                       rebuild=rebuild_ultrametrics)
 
     if normalize_scale:
         UX = UX / UX.max()
@@ -230,24 +289,27 @@ def compute_fgw(
         log=True,
     )
     fgw_cost = float(log["partial_fgw_dist"])
-    if args.diagnostics:
-        print("\nComputing diagnostic OT distances...")
-        # decomposition: feature-only and structure-only runs for context
-        print("  Baseline: partial Wasserstein (feature only)...")
-        _, log_w = ot.partial.partial_wasserstein(
-            p, q, M, m=mass_fraction, nb_dummies=nb_dummies,
-            numItermax=num_iter_max, log=True,
-        )
-        feat_cost = float(log_w["partial_w_dist"])
 
-        print("  Baseline: partial GW (structure only)...")
+    # Feature-only baseline is ~free (benchmarked at ~0.2% of the fused solve
+    # at n=m=400), so it always runs -- half the decomposition for nothing.
+    print("  Baseline: partial Wasserstein (feature only)...")
+    _, log_w = ot.partial.partial_wasserstein(
+        p, q, M, m=mass_fraction, nb_dummies=nb_dummies,
+        numItermax=num_iter_max, log=True,
+    )
+    feat_cost = float(log_w["partial_w_dist"])
+
+    if diagnostics:
+        # Structure-only baseline is the expensive half: ~100x the fused solve
+        # at n=m=400, because pure GW leaves the conditional gradient with no
+        # feature term to descend. Gated behind --diagnostics for that reason.
+        print("  Baseline: partial GW (structure only) -- this is the slow one...")
         _, log_gw = ot.gromov.partial_gromov_wasserstein(
             UX, UY, p, q, m=mass_fraction, loss_fun="square_loss",
             nb_dummies=nb_dummies, numItermax=num_iter_max, log=True,
         )
         struct_cost = float(log_gw["partial_gw_dist"])
     else:
-        feat_cost = np.nan
         struct_cost = np.nan
 
     # matches: mask rows that transport (almost) no mass under partial matching
@@ -365,8 +427,19 @@ def parse_args():
                              "costs nothing on small problems -- the solver still "
                              "exits early once converged.")
     parser.add_argument("--diagnostics", action="store_true",
-                        help="Also compute baseline partial Wasserstein and partial" 
-                            "Gromov-Wasserstein distances.")
+                        help="Also compute the structure-only (partial GW) "
+                             "baseline. Benchmarked at ~100x the fused solve "
+                             "(12.8s vs 0.11s at n=m=400), so it is off by "
+                             "default -- this flag, not the ultrametric cache, "
+                             "is what governs runtime. The feature-only "
+                             "(partial Wasserstein) baseline is ~free and "
+                             "always runs regardless.")
+    parser.add_argument("--rebuild-ultrametrics", action="store_true",
+                        help="Ignore any cached *_ultrametric_<metric>.npy and "
+                             "recompute. Caches are auto-invalidated when the "
+                             "source .npy is newer or its row count changed, "
+                             "so this is only needed if you have edited "
+                             "ultrametric_from_points itself.")
     parser.add_argument("--output", default="fgw_transport.png")
     return parser.parse_args()
 
@@ -408,11 +481,16 @@ def main():
     labels2 = load_labels(args.meta2, Y.shape[0])
 
     print("\n-- Computing partial FGW --")
-    res = compute_fgw(X, Y, mass_fraction=args.mass, alpha=args.alpha,
+    res = compute_fgw(X, Y,
+                      emb1_path=args.emb1, emb2_path=args.emb2,
+                      mass_fraction=args.mass, alpha=args.alpha,
                       metric=args.metric, normalize_scale=args.normalize_scale,
                       nb_dummies=args.nb_dummies, num_iter_max=args.num_iter_max,
                       X_struct=X_struct, Y_struct=Y_struct,
-                      struct_metric=args.struct_metric)
+                      struct1_path=args.struct1, struct2_path=args.struct2,
+                      struct_metric=args.struct_metric,
+                      diagnostics=args.diagnostics,
+                      rebuild_ultrametrics=args.rebuild_ultrametrics)
 
     print("\n-- Results --")
     print(f"  Fused cost   (alpha={args.alpha}) : {res['fgw_cost']:.6f}")
