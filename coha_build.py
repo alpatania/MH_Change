@@ -322,6 +322,38 @@ def build_database(
             )
 
 
+# CLAWS7 tags that COHA uses (or extends) to mark tokens the tagger could not
+# resolve to real vocabulary. Sourced from the CLAWS7 reference and the CCOHA
+# paper's description of COHA's tagset extensions:
+#   fo   - "formula"; what CLAWS assigns to word-plus-digits run-ons, so this
+#          is the tag that catches endnote fusion like "insanity.42"
+#   fu   - "unclassified word"
+#   null - COHA's own marker for invalid tokens
+# Deliberately NOT included:
+#   zz   - COHA extends this to single letters AND any token containing a dash,
+#          so it fires on legitimate compounds ("insane-sounding") as often as
+#          on junk. Too blunt to use as a contamination signal.
+#   y    - punctuation, which is normal context, not contamination.
+SUSPECT_POS = {"fo", "fu", "null"}
+
+
+def is_suspect_token(pos: str, lemma: str) -> bool:
+    """Flag a context token the tagger failed to resolve.
+
+    Two independent signals, either of which is sufficient:
+      1. A POS tag from SUSPECT_POS.
+      2. An empty lemma. Real vocabulary always lemmatises; a blank lemma
+         means the token was not recognised. Note "@" placeholders also carry
+         a blank lemma, so callers must exclude them BEFORE calling this or
+         every redacted window scores as malformed.
+
+    This flags for review and routing -- it is not a discard rule. A token can
+    be malformed and still carry real meaning ("insanity.42" is a genuine
+    occurrence of "insanity" with an endnote marker welded to it).
+    """
+    return (pos or "").strip().lower() in SUSPECT_POS or not (lemma or "").strip()
+
+
 def prefix_bounds(value: str) -> tuple[str, str]:
     value = value.casefold()
     return value, value + "\U0010ffff"
@@ -414,10 +446,15 @@ def export_csv(
                  f"corpus_token_id_{i}", f"word_id_{i}")
             )
         fields = [
-            "occurrence", "search", "text_id", "document_file", "genre", "year",
-            "document_word_count", "title", "author", "source", "token_index",
+            "occurrence", "uid", "search", "text_id", "document_file", "genre",
+            "year", "document_word_count", "title", "author", "source",
+            "token_index",
             *match_fields, "context_before", "matched_text", "context_after",
             "full_context",
+            # Per-window contamination scoring. Purely additive: everything
+            # downstream reads columns by name, so old consumers are unaffected.
+            "ctx_n_tokens", "ctx_n_at", "ctx_n_bad_pos", "ctx_max_word_id",
+            "ctx_bad_forms",
         ]
         writer = csv.DictWriter(output, fieldnames=fields)
         writer.writeheader()
@@ -432,20 +469,39 @@ def export_csv(
             start = int(base["token_index"])
             end = start + ngram_size - 1
             nearby = connection.execute(
-                "SELECT token_index, word FROM tokens WHERE text_id=? AND token_index "
-                "BETWEEN ? AND ? ORDER BY token_index",
+                "SELECT token_index, word, word_id, pos, lemma FROM tokens "
+                "WHERE text_id=? AND token_index BETWEEN ? AND ? "
+                "ORDER BY token_index",
                 (base["text_id"], max(1, start - context_words), end + context_words),
             ).fetchall()
-            before = " ".join(word for index, word in nearby if index < start)
-            matched = " ".join(word for index, word in nearby if start <= index <= end)
-            after = " ".join(word for index, word in nearby if index > end)
+            before = " ".join(r[1] for r in nearby if r[0] < start)
+            matched = " ".join(r[1] for r in nearby if start <= r[0] <= end)
+            after = " ".join(r[1] for r in nearby if r[0] > end)
+
+            # Score the CONTEXT only -- the matched slot is scored separately by
+            # the existing match_pos_i / word_id_i columns, and folding it in
+            # here would make every row look contaminated by its own target.
+            ctx = [r for r in nearby if not (start <= r[0] <= end)]
+            n_at = sum(1 for r in ctx if r[1] == "@")
+            real = [r for r in ctx if r[1] != "@"]
+            bad = [r for r in real if is_suspect_token(r[3], r[4])]
             base.update(
                 occurrence=count,
+                uid=f"{base['text_id']}:{start}",
                 search=search,
                 context_before=before,
                 matched_text=matched,
                 context_after=after,
                 full_context=" ".join(part for part in (before, matched, after) if part),
+                ctx_n_tokens=len(ctx),
+                ctx_n_at=n_at,
+                ctx_n_bad_pos=len(bad),
+                # wordID is also the frequency RANK in COHA's lexicon, so the
+                # rarest context token is a cheap contamination proxy: genuine
+                # vocabulary ranks in the tens of thousands, malformed hapaxes
+                # rank in the millions. Reported over non-@ tokens only.
+                ctx_max_word_id=max((r[2] for r in real), default=""),
+                ctx_bad_forms=";".join(r[1] for r in bad),
             )
             writer.writerow(base)
     print(f"Wrote {count:,} matches to {csv_path}")
