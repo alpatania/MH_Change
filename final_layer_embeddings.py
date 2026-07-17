@@ -57,10 +57,71 @@ from sklearn.preprocessing import normalize
 
 # -- text cleaning --------------------------------------------------------------
 
-def clean_passage(text: str) -> str:
-    """Remove @ placeholder tokens and normalise whitespace."""
+def clean_token(tok: str) -> str:
+    """Repair one COHA malformed token. Rules only -- no embeddings, no fuzzy
+    matching, no dictionary. Each rule targets a malformation class documented
+    in the CCOHA paper (Alatrash et al., LREC 2020).
+
+    Order matters: the endnote rule anchors on the whole token, so it must run
+    before the splitters break the token apart.
+    """
+    # 1. Endnote/footnote marker welded to a word by digitisation:
+    #       "insanity.42"  ->  "insanity ."
+    #    The period is a real sentence boundary and is kept; the note number is
+    #    dropped. Requires >=2 leading letters, so "3.14" and "p.42" are safe.
+    tok = re.sub(r'^([A-Za-z]{2,})\.(\d{1,3})$', r'\1 .', tok)
+
+    # 2. Trailing page/line marker: "|p130", "Agnesp106said" style residue.
+    tok = re.sub(r'^\|?p\d{1,4}(?=[A-Za-z])', '', tok)
+
+    # 3. camelCase run-on, where the original casing survived the concatenation:
+    #       "inSanFrancisco" -> "in San Francisco"
+    #    This is what makes inSanFrancisco stop matching the "insan" prefix.
+    tok = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', tok)
+
+    # 4. Sentence-boundary fusion, lowercase-PUNCT-Uppercase:
+    #       "them:First" -> "them : First" ;  "there.But" -> "there . But"
+    #    Hyphens are deliberately excluded: "insane-sounding" is a real
+    #    compound, and COHA tags it zz exactly like the junk, so there is no
+    #    safe way to split hyphens and no reason to.
+    tok = re.sub(r'(?<=[a-z])([.:;,])(?=[A-Z])', r' \1 ', tok)
+
+    return tok
+
+
+def clean_passage(text: str, apply_repairs: bool = True) -> str:
+    """Remove @ placeholder tokens, repair malformed tokens, normalise space.
+
+    NOTE on @: COHA replaces 10 consecutive tokens every 200 for copyright, so
+    ~5% of the corpus is gone and roughly a quarter of a 41-token window
+    intersects a block. Stripping the run SPLICES the two sides into a fluent
+    but false context, and leaves no marker behind. That is deliberate here to
+    preserve existing behaviour -- but count the damage with the ctx_n_at
+    column from coha_build.py rather than trusting the spliced text.
+    """
     text = re.sub(r'(?:@\s*)+', ' ', text)
+    if apply_repairs:
+        text = ' '.join(clean_token(t) for t in text.split())
     return re.sub(r'\s+', ' ', text).strip()
+
+
+def clean_word(word: str, apply_repairs: bool = True) -> str:
+    """Repair the TARGET the same way its passage is repaired, then reduce it
+    to the bare form to search for.
+
+    This coupling is not optional. find_target_token_span() looks for `word`
+    inside the CLEANED passage, so repairing "insanity.42" -> "insanity ." in
+    the passage while leaving word as "insanity.42" makes the search fail and
+    the row is silently dropped as "SKIPPED (word not found after cleaning)".
+    Both sides must go through the same rules.
+    """
+    if apply_repairs:
+        word = clean_token(word)
+    # keep the first surviving alphanumeric run: "insanity ." -> "insanity"
+    parts = [p for p in re.split(r'\s+', word) if re.search(r'\w', p)]
+    if not parts:
+        return word.strip()
+    return re.sub(r'^\W+|\W+$', '', parts[0])
 
 
 # -- data loading ----------------------------------------------------------------
@@ -106,6 +167,10 @@ def load_data(
 
     if apply_cleaning:
         df['passage'] = df['passage'].apply(clean_passage)
+        # Must repair `word` with the SAME rules, or find_target_token_span()
+        # searches the cleaned passage for an uncleaned target and the row is
+        # silently dropped.
+        df['word'] = df['word'].apply(clean_word)
 
     df = df.dropna(subset=['wid', 'word', 'passage']).reset_index(drop=True)
     print(f"Loaded {len(df)} rows  |  word forms: {df['word'].value_counts().to_dict()}")
@@ -118,8 +183,22 @@ def load_data(
 
 # -- token location ----------------------------------------------------------------
 
+def target_pattern(word: str) -> str:
+    r"""Word-boundary pattern that survives targets ending in punctuation.
+
+    \b only exists between a word char and a non-word char, so the old
+    r'\b' + word + r'\b' could NEVER match a target like "insane." -- the
+    trailing \b needs a word char after the period and there is only a space.
+    Those rows were silently dropped. Anchors are applied only on the sides
+    where the target actually starts/ends with a word character.
+    """
+    pre = r'\b' if re.match(r'\w', word) else ''
+    post = r'\b' if re.search(r'\w$', word) else ''
+    return pre + re.escape(word) + post
+
+
 def find_target_token_span(tokenizer, passage: str, word: str) -> tuple[int, int] | None:
-    m = re.search(r'\b' + re.escape(word) + r'\b', passage, re.IGNORECASE)
+    m = re.search(target_pattern(word), passage, re.IGNORECASE)
     if m is None:
         return None
     char_start, char_end = m.start(), m.end()
@@ -177,6 +256,13 @@ def build_embedding_matrix(
             print('ok')
             vecs.append(vec)
             keep_idx.append(idx)
+    n_skipped = len(df) - len(keep_idx)
+    if n_skipped:
+        print(f'\n  WARNING: {n_skipped} of {len(df)} rows ({n_skipped/len(df):.1%}) '
+              f'were SKIPPED -- target not locatable in its own passage.\n'
+              f'  This rate is genre- and decade-correlated, so an uneven skip '
+              f'rate across decades is a\n  missingness process in your sample '
+              f'BEFORE any FGW runs. Track it.')
     return np.array(vecs), df.loc[keep_idx].reset_index(drop=True)
 
 
@@ -370,7 +456,7 @@ def main():
                    help='Number of k-means clusters')
     p.add_argument('--cosine-matrix', action='store_true')
     p.add_argument('--no-clean',     action='store_true',
-                   help='Disable @ token removal')
+                   help='Disable @ token removal AND malformed-token repair')
     p.add_argument('--device',       default='cpu', choices=['cpu', 'cuda'])
     p.add_argument('--output',       default=None)
     # UMAP-on-PCA parameters (separate from --method umap, which controls the
