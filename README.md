@@ -1,314 +1,267 @@
-# MH_Change — Contextual Word Embeddings & Semantic Shift Analysis
+# MH_Change — Contextual Word Embeddings & Semantic Shift
 
-Tools for analyzing semantic shifts in text corpora using contextual embeddings from RoBERTa.
+Measures how a word's meaning shifts across decades of the Corpus of Historical
+American English (COHA), using RoBERTa contextual embeddings and partial Fused
+Gromov-Wasserstein (FGW) optimal transport between consecutive decades.
 
-**Available scripts:**
+The core idea: embed every occurrence of a target term in each decade, then ask
+how the decade-to-decade point clouds correspond. FGW compares them on two axes
+at once — where occurrences sit in RoBERTa space (feature term) and how each
+decade's internal sense hierarchy is organised (structure term) — so a result
+can be read as positional drift, structural rearrangement, or both.
 
-| Script | Purpose | Status |
-|--------|---------|--------|
-| `final_layer_embeddings.py` | **Step 1 — the map.** Extract final-layer embeddings and visualize where contextual usages cluster | ✓ Available |
-| `FGW_distance.py` | **Semantic shift.** Compute Fused Gromov-Wasserstein distance between two sets of embeddings to quantify semantic change | ✓ Available |
-| `contextual_embeddings.py` | **Step 2 — the journey.** *(Not included)* For a chosen subset of passages, trace how embeddings travel through all layers. Inspired by [Zimmerman et al., arXiv:2412.10924](https://arxiv.org/abs/2412.10924). | ⚠️ Missing |
+---
+
+## The pipeline
+
+Four stages, run in order. The first two are shell wrappers over per-decade
+Python; the last two are visualisations.
+
+```
+run_all_decades.sh            ->  per-decade search-result CSVs
+run_embedding_and_distance.sh ->  per-decade embeddings + per-pair FGW distances
+fgw_sankey.py                 ->  cluster-level sense-drift Sankey
+fgw_tanglegram.py             ->  side-by-side decade dendrograms
+```
+
+Everything for one search term is prefixed with that term's slug (e.g.
+`insan_1950s_results.csv`), so multiple terms can share one `results/`
+directory without colliding.
+
+### Stage 1 — build per-decade match CSVs
+
+`run_all_decades.sh` discovers which decades exist from the `db_*.zip`
+filenames in `--db-dir`, then runs `coha_build.py` once per decade. Each run
+builds (or reuses) a per-decade SQLite database and writes a CSV of every
+context window matching the search term.
+
+```bash
+./run_all_decades.sh \
+    --db-dir coha-db-003 \
+    --lexicon-txt coha-lexicon.txt \
+    --sources-txt coha-sources.txt \
+    --search insan \
+    --out-dir results \
+    --context 20
+```
+
+Matching is a **case-folded prefix range** on either the word form or its
+lemma, so `--search insan` returns `insane`, `insanity`, `insanely`,
+`Insane`, `INSANE`, and so on. Narrow with `--pos-filter` (CLAWS7 tag
+prefixes, e.g. `JJ,NN`) if a prefix pulls in unwanted parts of speech.
+The SQLite DB is search-agnostic and reused across terms by default; pass
+`--rebuild` to force a fresh build.
+
+Each decade's CSV carries the matched token, its context window, per-token
+metadata, and a set of contamination-scoring columns (`ctx_n_at`,
+`ctx_n_bad_pos`, `ctx_max_word_id`) used by the diagnostics — see
+`README_diagnostics.md`.
+
+### Stage 2 — embeddings and FGW distances
+
+`run_embedding_and_distance.sh` discovers the Stage 1 CSVs, runs
+`final_layer_embeddings.py` on each decade, then runs `FGW_distance.py` on
+every consecutive decade pair.
+
+```bash
+./run_embedding_and_distance.sh \
+    --search insan --csv-dir results --out-dir results \
+    --struct-suffix _pca90_umap.npy \
+    --struct-metric cosine \
+    --rebuild
+```
+
+Per decade this produces `_embeddings.npy` (raw 768-d RoBERTa vectors, one per
+occurrence), `_coords.csv` (2-D plot coordinates plus all metadata),
+`_pca90.npy`, and — unless `--no-umap` — `_pca90_umap.npy`. Per pair it
+produces an FGW transport matrix, a matches array, a summary CSV, and a
+transport heatmap PNG. All per-pair summaries are combined into
+`<search>_fgw_summary_all_pairs.csv`.
+
+`--struct-suffix` selects **Path B**: the FGW structure term is built from the
+named per-decade arrays (here the UMAP outputs) instead of the raw embeddings.
+If a struct file is missing for a pair, that pair falls back to Path A with a
+warning rather than failing. Leaving `--struct-suffix` empty runs Path A for
+every pair.
+
+Two things worth knowing about this stage. The FGW feature term needs a shared
+coordinate space, so it always reads the raw `_embeddings.npy`; only the
+structure term uses the struct arrays. And the `--metric` you pass here must
+match the metric used anywhere the same clouds are compared downstream (the
+tanglegram's linkage, the diagnostics), or you are comparing two different
+geometries.
+
+### Stage 3 — cluster-level Sankey
+
+`fgw_sankey.py` cuts each decade's single-linkage dendrogram at a per-decade
+height, aggregates the leaf-level FGW transport up to cluster level, and draws
+a Sankey where each column is a decade, each node a sense cluster (labelled by
+its top lemmas), and each ribbon the mass flowing between clusters. Colours
+follow mass-flow continuity, so a stable sense keeps its colour, a split shows
+as two same-coloured branches, and a genuinely new sense gets a fresh colour.
+
+```bash
+python fgw_sankey.py \
+    --out-dir results --search insan \
+    --output results/insan_sankey.html
+```
+
+Useful knobs: `--height-fraction` (where to cut each dendrogram, default 0.5 of
+max merge height), `--min-clusters`/`--max-clusters` (readability rails),
+`--coloring` (default `lemma`), and `--clustering` (`ultrametric` by default,
+or HDBSCAN). Run `python fgw_sankey.py --help` for the full set.
+
+### Stage 4 — tanglegram
+
+`fgw_tanglegram.py` draws each decade's actual dendrogram side by side and
+connects leaves across decades by their FGW correspondence, so you can see
+which branches map onto which.
+
+```bash
+python fgw_tanglegram.py \
+    --out-dir results --search insan \
+    --output results/insan_tanglegram.html
+```
+
+**This stage needs prebuilt linkage matrices.** `FGW_distance.py` builds each
+decade's single-linkage tree internally but keeps only the derived cophenetic
+distances, discarding the tree itself. `fgw_build_linkage.py` recomputes and
+saves the tree, using the identical linkage call so the saved tree matches the
+one FGW used. Run it once per decade first:
+
+```bash
+for d in 1820 1830 1840 1850 1860 1870 1880 1890 1900 1910 \
+         1920 1930 1940 1950 1960 1970 1980 1990 2000 2010; do
+    python fgw_build_linkage.py \
+        --emb results/insan_${d}s_embeddings.npy \
+        --metric cosine \
+        --output results/insan_${d}s_linkage.npy
+done
+```
+
+Use the same `--metric` here as in Stage 2. If a linkage was built from a
+different (older) embeddings file than the one the tanglegram loads, you will
+get a leaf-count mismatch error; delete the stale `_linkage.npy` and rebuild.
+
+---
+
+## Running many terms at once
+
+`run_pipeline_from_csv.py` drives Stages 1–2 for every row of a
+`search_terms.csv`, optionally filtered by a token-count floor (see
+`token_count_sweep.py` in the diagnostics README). It reruns each term through
+both shell scripts, reuses the search-agnostic DBs across terms, records a
+manifest, and continues past individual failures. See its module docstring for
+the full argument list.
+
+---
+
+## Word-form normalisation (current state)
+
+The matched target word is lightly repaired before embedding: endnote markers
+and trailing punctuation are stripped (`insanity.42` -> `insanity`), camelCase
+run-ons are split, and the result is lowercased so `INSANE`, `Insane`, and
+`insane` collapse into one legend entry while morphology (`insane` /
+`insanity` / `insanely`) is preserved.
+
+Two malformed classes are **not** yet folded: slash-joined tokens
+(`insane/Jack`) and boundary-less run-ons (`insanityof`, `insant`). These
+still appear as separate legend entries. Folding them requires normalising
+upstream in `coha_build.py` (a `word_clean` column read by every downstream
+consumer) rather than in the plot script; that change is planned but not yet
+made. Until then, treat the rarest legend entries as probable artifacts and
+cross-check against the contamination columns.
+
+Redaction handling: COHA replaces ten consecutive tokens every two hundred with
+`@` for copyright. These runs are stripped before RoBERTa sees the passage.
+Stripping splices the two sides together, so the resulting context reads as
+fluent but is missing material; the `ctx_n_at` column records how many `@`
+tokens a window contained before stripping, so contaminated windows remain
+countable. Pass `--no-clean` to disable both the `@` removal and the target
+repair.
+
+---
+
+## Output files, per search term
+
+| File | Produced by | Contents |
+|------|-------------|----------|
+| `<term>_<decade>s_results.csv` | Stage 1 | matched context windows + metadata |
+| `corpus_search_<decade>.sqlite` | Stage 1 | per-decade token DB (reused across terms) |
+| `<term>_<decade>s_embeddings.npy` | Stage 2 | raw 768-d vectors, one per occurrence |
+| `<term>_<decade>s_coords.csv` | Stage 2 | 2-D coords + metadata (drives plots) |
+| `<term>_<decade>s_pca90.npy` | Stage 2 | PCA to 90% variance |
+| `<term>_<decade>s_pca90_umap.npy` | Stage 2 | UMAP of the PCA output (Path B struct input) |
+| `<term>_fgw_<d1>_<d2>_transport_matrix.npy` | Stage 2 | (n1 x n2) transport plan |
+| `<term>_fgw_<d1>_<d2>_summary.csv` | Stage 2 | fused / feature / structure costs for the pair |
+| `<term>_fgw_summary_all_pairs.csv` | Stage 2 | all pairs combined |
+| `<term>_<decade>s_linkage.npy` | `fgw_build_linkage.py` | single-linkage tree for the tanglegram |
+| `<term>_sankey.html` | Stage 3 | cluster-level drift Sankey |
+| `<term>_tanglegram.html` | Stage 4 | side-by-side decade dendrograms |
 
 ---
 
 ## Installation
 
-### Using UV (recommended)
+The project is managed with [uv](https://docs.astral.sh/uv/) and pinned in
+`uv.lock`. From the project root:
 
 ```bash
 uv sync
 ```
 
-Or with pip in a virtual environment:
+This creates `.venv/` and installs the locked dependency set (Python >= 3.12;
+RoBERTa via `transformers` + `torch`, optimal transport via `pot`, `umap-learn`
+for the struct arrays, `plotly` for the HTML visualisations).
+
+Run scripts either through uv, which uses the project environment automatically:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # macOS/Linux
-# or: .venv\Scripts\activate  # Windows
-pip install -e .
+uv run python fgw_tanglegram.py --out-dir results --search insan \
+    --output results/insan_tanglegram.html
 ```
 
-### Core dependencies
+or by activating the environment once per shell:
 
-- `transformers` ≥ 5.12.1 — RoBERTa tokenizer & model
-- `torch` ≥ 2.12.1 — PyTorch neural networks
-- `scikit-learn` ≥ 1.9.0 — PCA, k-means, metrics
-- `scipy` ≥ 1.14.0 — hierarchical clustering, distance metrics
-- `pandas` ≥ 3.0.3 — CSV handling
-- `numpy` ≥ 2.4.6 — numerical arrays
-- `plotly` ≥ 6.8.0 — interactive visualizations
-- `matplotlib` ≥ 3.11.0 — static plotting
-- `pot` ≥ 0.9.0 — Python Optimal Transport (for FGW)
-- `umap-learn` ≥ 0.5.6 — UMAP dimensionality reduction (optional; falls back to PCA)
+```bash
+source .venv/bin/activate
+python fgw_tanglegram.py --out-dir results --search insan \
+    --output results/insan_tanglegram.html
+```
+
+**If you move the project folder**, the virtual environment breaks — a venv
+hard-codes its own absolute path. Recreate it:
+
+```bash
+deactivate 2>/dev/null
+rm -rf .venv
+uv sync
+```
+
+**Do not keep `.venv/` in a cloud-synced folder** (OneDrive, Dropbox, iCloud).
+Sync mangles the thousands of small binary files a venv contains and produces
+corrupted-package errors (e.g. `ModuleNotFoundError: No module named
+'yaml.error'`) that look like code bugs but are really half-synced files. Keep
+the code in the synced folder and the environment outside it:
+
+```bash
+export UV_PROJECT_ENVIRONMENT=~/venvs/MH_Change   # add to ~/.zshrc to persist
+uv sync
+```
+
+If `uv` warns that `VIRTUAL_ENV` does not match the project environment path,
+an old venv is still activated in your shell; run `deactivate` (or open a fresh
+terminal) so the active environment and uv's target agree.
+
+A `requirements.txt` is also provided for non-uv installs (`pip install -r
+requirements.txt` into a manually created venv), but `uv.lock` is the source of
+truth.
 
 ---
 
-## Data format
-
-Both scripts accept the same CSV and auto-detect whether it has a header row.
-
-### Named-column format (corpus query output, **with header**)
-
-```
-occurrence, search, text_id, document_file, genre, year, ..., word_id_1, matched_text, ..., full_context
-1, insan, 505250, mag_1855_505250.txt, MAG, 1855, ..., 5931, insane, ..., "dog . Crowds of idlers ..."
-```
-
-Default column mapping (matches the format above; change with `--wid-col`, `--word-col`, `--passage-col`):
-
-| Role | Default column name |
-|------|---------------------|
-| Passage ID | `word_id_1` |
-| Matched word | `matched_text` |
-| Passage text | `full_context` |
-
-All other columns (e.g. `genre`, `year`, `match_pos_1`, `source`) are kept as metadata
-and can be used for colouring and labelling points in `final_layer_embeddings.py`.
-
----
-
-## Noise cleaning
-
-Both scripts automatically remove `@` placeholder tokens before tokenisation.
-These appear in corpus exports as variable-length sequences of space-separated
-`@` signs (e.g. `@ @ @`, `@ @ @ @ @ @ @ @ @ @`) marking redacted text spans.
-They are stripped and whitespace is normalised before the passage is passed to RoBERTa.
-
-Pass `--no-clean` to disable this behaviour.
-
----
-
-## Step 1 — `final_layer_embeddings.py`
-
-Extracts one vector per passage (last RoBERTa layer, mean-pooled over the
-word's tokens) and plots all passages in a single 2D or 3D scatter.
-
-### What it produces
-
-Each dot is one **passage**:
-
-- **Position** — PCA or UMAP of the final hidden-state vector
-- **Colour** — passage ID, a metadata column (e.g. `genre`, `year`), or k-means cluster
-- **Hover** — passage ID, word form, metadata values, and a text snippet
-
-### Minimal usage
-
-```bash
-python final_layer_embeddings.py --input data.csv
-```
-
-`--word` is not required. Each row already carries its matched word in the `matched_text`
-column, and the script reads it from there. Pass `--word insane` only if your CSV mixes
-multiple search terms and you want to process just one at a time.
-
-Saves `insane_final_layer.html` and `insane_final_layer_coords.csv`.
-
-### Full options
-
-```bash
-python final_layer_embeddings.py \
-  --input        data.csv          \  # CSV file
-  --word         insane            \  # target word (case-insensitive)
-  --wid-col      word_id_1         \  # column for passage ID (default: word_id_1)
-  --word-col     matched_text      \  # column for matched word (default: matched_text)
-  --passage-col  full_context      \  # column for passage text (default: full_context)
-  --model        roberta-base      \  # roberta-base (default) or roberta-large
-  --method       pca               \  # pca (default) or umap
-  --dims         2                 \  # 2 (default) or 3
-  --color-col    genre             \  # colour points by this column (e.g. genre, year)
-  --label-col    year              \  # label points with this column
-  --clusters     3                 \  # run k-means and colour by cluster
-  --cosine-matrix                  \  # save pairwise cosine-similarity matrix as CSV
-  --no-clean                       \  # disable @ token removal
-  --device       cpu               \  # cpu (default) or cuda
-  --output       insane_map.html      # output filename
-```
-
-### Recommended usage with real corpus data
-
-```bash
-# Colour by genre, discover natural groupings with k-means
-python final_layer_embeddings.py --input insan_results.csv --word insane \
-    --color-col genre --clusters 3 --cosine-matrix
-
-# Colour by decade for diachronic analysis
-python final_layer_embeddings.py --input insan_results.csv --word insane \
-    --color-col year --method umap
-```
-
-The console prints which passage IDs landed in each cluster — copy those
-into a subset CSV to feed into Step 2 (if available).
-
-### Output files
-
-- `{word}_final_layer.html` — Interactive scatter plot
-- `{word}_final_layer_coords.csv` — Reduced coordinates + metadata
-- `{word}_final_layer_coords.npy` — NumPy array of coordinates
-- `{word}_final_layer_pca90.npy` — Full PCA (90% variance) array *if using `--method pca`*
-- `{word}_final_layer_cosine.csv` — Pairwise cosine similarity *if using `--cosine-matrix`*
-
----
-
-## Computing Semantic Shift — `FGW_distance.py` ✓
-
-Computes the Fused Gromov-Wasserstein distance between two sets of pre-computed embeddings
-to measure how much a word's semantic usage has changed between corpora or time periods.
-
-### Use case
-After extracting embeddings for the same word in two different corpora (e.g., 1850s vs. 1950s),
-compute the transport-based distance to quantify semantic shift.
-
-### Input
-
-Two NumPy `.npy` files containing embedding matrices:
-- Corpus 1: shape `[n_contexts, embedding_dim]` (e.g., 768 for RoBERTa-base)
-- Corpus 2: shape `[m_contexts, embedding_dim]`
-
-### Minimal usage
-
-```bash
-python FGW_distance.py --emb1 corpus_1850s.npy --emb2 corpus_1950s.npy
-```
-
-### Full options
-
-```bash
-python FGW_distance.py \
-  --emb1 corpus1_embeddings.npy    \  # required: corpus 1 embeddings
-  --emb2 corpus2_embeddings.npy    \  # required: corpus 2 embeddings
-  --mass 0.8                       \  # mass fraction for partial GW (default: 0.8)
-  --metric euclidean               \  # distance metric: euclidean or cosine (default: euclidean)
-  --output fgw_transport.png          # output plot filename (default: fgw_transport.png)
-```
-
-### Output
-
-- **PNG plot** — Transport matrix heatmap + mass distribution
-- **Console output** — Semantic shift score + top 10 sentence matches between corpora
-
-### Example workflow
-
-```bash
-# Extract embeddings for corpus 1 (1850s)
-python final_layer_embeddings.py --input corpus_1850s.csv \
-    --output insane_1850s.html
-
-# Extract embeddings for corpus 2 (1950s)
-python final_layer_embeddings.py --input corpus_1950s.csv \
-    --output insane_1950s.html
-
-# Compute semantic shift
-python FGW_distance.py \
-    --emb1 insane_1850s_coords.npy \
-    --emb2 insane_1950s_coords.npy
-```
-
----
-
-## Step 2 — `contextual_embeddings.py` ⚠️ (Not included)
-
-Extracts the hidden state at **every layer** for each passage, stacks them,
-and plots each (passage × layer) pair. Lines connect the same passage across
-layers, tracing its embedding trajectory through the model.
-
-### What it produces
-
-Each dot is one **(passage × layer)** pair:
-
-- **Position** — PCA or UMAP of the hidden-state vector at that layer
-- **Colour** — layer depth (dark = early, bright = late)
-- **Connected lines** — trace the same passage across all layers
-- **Hover** — passage ID, layer number, and a text snippet
-
-### Minimal usage
-
-```bash
-python contextual_embeddings.py --input subset.csv
-```
-
-**This script is not included in this repository.**
-
-If available, it would produce the following:
-
-Saves `insane_embeddings.html` and `insane_embeddings_coords.csv`.
-
-### Full options (if script exists)
-
-```bash
-python contextual_embeddings.py \
-  --input        subset.csv        \  # CSV file (ideally a cluster subset from Step 1)
-  --word         insane            \  # target word
-  --wid-col      word_id_1         \  # column for passage ID (default: word_id_1)
-  --word-col     matched_text      \  # column for matched word (default: matched_text)
-  --passage-col  full_context      \  # column for passage text (default: full_context)
-  --model        roberta-base      \  # roberta-base (default) or roberta-large
-  --method       pca               \  # pca (default) or umap
-  --dims         2                 \  # 2 (default) or 3
-  --layers       all               \  # 'all', '0,4,8,12', or '0:13:2'
-  --no-clean                       \  # disable @ token removal
-  --device       cpu               \  # cpu (default) or cuda
-  --output       insane_traj.html     # output filename
-```
-
-### Layer subsets (less crowded, faster)
-
-```bash
-# Every other layer
-python contextual_embeddings.py --input subset.csv --word insane --layers 0:13:2
-
-# Only the last four layers
-python contextual_embeddings.py --input subset.csv --word insane --layers 9,10,11,12
-```
-
----
-
-## Recommended end-to-end workflow
-
-```bash
-# 1. Map all passages in the final layer; colour by genre; find 3 clusters
-python final_layer_embeddings.py --input insan_results.csv --word insane \
-    --color-col genre --clusters 3 --cosine-matrix
-
-# 2. Inspect console output to see which word_id_1 values land in each cluster.
-#    Filter the CSV to one representative per cluster and save as subset.csv.
-
-# 3. Examine trajectories for those representatives
-python contextual_embeddings.py --input subset.csv --word insane
-
-# 4. Optionally use roberta-large for 24-layer richer trajectories
-python contextual_embeddings.py --input subset.csv --word insane \
-    --model roberta-large --device cuda
-```
-
----
-
-## How each script works internally
-
-### `final_layer_embeddings.py`
-1. Load CSV (auto-detect header); strip `@` sequences; filter to target word
-2. Tokenise each passage with RoBERTa's BPE tokenizer
-3. Locate the target word's token(s) via character-offset mapping
-4. Forward pass → `last_hidden_state`; mean-pool over the word's tokens → one 768-dim vector per passage
-5. Optional k-means on the full-dimensional matrix
-6. PCA / UMAP → 2D or 3D coordinates
-7. Plotly scatter, saved as self-contained HTML
-
-### `contextual_embeddings.py`
-Steps 1–3 identical, then for each layer:
-
-4. Forward pass with `output_hidden_states=True`; mean-pool at every layer → one vector per (passage, layer)
-5. Stack into matrix of shape `(n_passages × n_layers, hidden_dim)`
-6. PCA / UMAP → 2D or 3D coordinates
-7. Plotly scatter with dotted lines connecting layers within the same passage
-
----
-
-## Tips
-
-- **roberta-large** has 24 layers and 1024-dim hidden states (vs. 12 layers / 768-dim for base). Richer trajectories, but ~2× slower and needs ~1.4 GB RAM.
-- Add `--device cuda` if you have a GPU.
-- Word matching is case-insensitive, so `insane`, `Insane`, and `INSANE` are all found by `--word insane`.
-- If a passage doesn't contain the target word after `@` removal, a warning is printed and that row is skipped.
-- Both scripts save a `*_coords.csv` alongside the HTML for post-processing in R or other tools.
-- The cosine-similarity matrix (`--cosine-matrix`) can be used with `hclust` in R or `scipy.cluster.hierarchy` in Python to build a dendrogram of passage similarity.
+## Diagnostics and analysis
+
+The scripts above are the production pipeline. A second tier of scripts checks
+whether the results are real — noise floors, corpus-size bias, chaining
+artifacts, and readable correspondence tables. Those are documented separately
+in **`README_diagnostics.md`** so this file stays focused on the run itself.

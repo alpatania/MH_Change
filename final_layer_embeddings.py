@@ -46,7 +46,6 @@ import argparse
 import os
 import re
 import sys
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -119,9 +118,13 @@ def clean_word(word: str, apply_repairs: bool = True) -> str:
         word = clean_token(word)
     # keep the first surviving alphanumeric run: "insanity ." -> "insanity"
     parts = [p for p in re.split(r'\s+', word) if re.search(r'\w', p)]
-    if not parts:
-        return word.strip()
-    return re.sub(r'^\W+|\W+$', '', parts[0])
+    bare = re.sub(r'^\W+|\W+$', '', parts[0]) if parts else word.strip()
+    # Lowercase (Option A). The target search in find_target_token_span is
+    # already re.IGNORECASE, so this does not change which rows match -- it
+    # only changes the value the plot GROUPS and colours by, collapsing
+    # INSANE / Insane / insane into a single legend entry. Morphology is
+    # untouched: insanity / insanely / insaneness stay distinct.
+    return bare.lower()
 
 
 # -- data loading ----------------------------------------------------------------
