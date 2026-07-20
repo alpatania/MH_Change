@@ -127,10 +127,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$SEARCH" ] || [ -z "$CSV_DIR" ] || [ -z "$OUT_DIR" ]; then
-  echo "Usage: $0 --search WORD --csv-dir DIR --out-dir DIR [options] (see --help)" >&2
+if [ -z "$SEARCH" ]; then
+  echo "Usage: $0 --search WORD [--csv-dir DIR] [--out-dir DIR] [options] (see --help)" >&2
+  echo "  --csv-dir and --out-dir both default to results/<search>/" >&2
   exit 1
 fi
+
+# Per-search home: default both csv-dir (where stage 1 wrote) and out-dir (where
+# stage 2/3 write) to results/<search>/, so the only required argument is
+# --search. Either can still be overridden explicitly.
+SEARCH_SLUG=$(printf '%s' "$SEARCH" | tr -c 'A-Za-z0-9_-' '_')
+DEFAULT_DIR="${OUT_DIR_BASE:-results}/${SEARCH_SLUG}"
+[ -z "$CSV_DIR" ] && CSV_DIR="$DEFAULT_DIR"
+[ -z "$OUT_DIR" ] && OUT_DIR="$DEFAULT_DIR"
 
 
 if [ ! -d "$CSV_DIR" ]; then

@@ -948,13 +948,15 @@ def parse_args():
         description="Cluster-level FGW sense-drift Sankey.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--out-dir", type=Path, required=True,
+    p.add_argument("--out-dir", type=Path, default=None,
                    help="Directory holding linkage.npy, coords.csv, and "
-                        "transport_matrix.npy files.")
+                        "transport_matrix.npy files "
+                        "(default: results/<search>/).")
     p.add_argument("--search", required=True,
                    help="Search term prefix for input files.")
-    p.add_argument("--output", type=Path, required=True,
-                   help="Output HTML path.")
+    p.add_argument("--output", type=Path, default=None,
+                   help="Output HTML path "
+                        "(default: <out-dir>/<search>_sankey.html).")
     p.add_argument("--output-pdf", type=Path, default=None,
                    help="Optional static PDF via Plotly's kaleido backend.")
     p.add_argument("--output-png", type=Path, default=None,
@@ -1079,7 +1081,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    out_dir = args.out_dir
+    # Resolve search-derived defaults: out-dir -> results/<search>/,
+    # output -> <out-dir>/<search>_sankey.html.
+    search_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", args.search)
+    out_dir = args.out_dir if args.out_dir else Path("results") / search_slug
+    args.out_dir = out_dir
+    if args.output is None:
+        args.output = out_dir / f"{args.search}_sankey.html"
 
     if not out_dir.is_dir():
         raise SystemExit(f"ERROR: {out_dir} is not a directory")

@@ -354,6 +354,107 @@ def is_suspect_token(pos: str, lemma: str) -> bool:
     return (pos or "").strip().lower() in SUSPECT_POS or not (lemma or "").strip()
 
 
+def clean_context_token(tok: str) -> str:
+    """Repair one context token with the same rules the embedding script's
+    clean_token uses, kept in sync deliberately. Unlike _regex_repair_surface
+    (which reduces the TARGET to a single bare form for grouping), this
+    PRESERVES splits: "them:First" stays "them : First" so the context keeps
+    both words and its real length for RoBERTa.
+    """
+    # endnote/footnote marker welded to a word: "insanity.42" -> "insanity ."
+    tok = re.sub(r'^([A-Za-z]{2,})\.(\d{1,3})$', r'\1 .', tok)
+    # trailing page/line marker residue
+    tok = re.sub(r'^\|?p\d{1,4}(?=[A-Za-z])', '', tok)
+    # camelCase run-on: "inSanFrancisco" -> "in San Francisco"
+    tok = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', tok)
+    # sentence-boundary fusion: "them:First" -> "them : First"
+    tok = re.sub(r'(?<=[a-z])([.:;,])(?=[A-Z])', r' \1 ', tok)
+    return tok
+
+
+def clean_context(text: str) -> str:
+    """Clean a context passage the way RoBERTa should see it: strip @
+    redaction runs, repair malformed tokens, normalise whitespace.
+
+    This is the SAME transformation final_layer_embeddings.clean_passage
+    applies, moved upstream so the saved *_results.csv already contains what
+    the model reads. Kept behaviourally identical so a downstream clean_passage
+    call is a safe no-op.
+    """
+    text = re.sub(r'(?:@\s*)+', ' ', text)
+    text = ' '.join(clean_context_token(t) for t in text.split())
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _regex_repair_surface(word: str) -> str:
+    """Rule-only repair of a surface form. Same rules as the embedding
+    script's clean_token, kept in sync deliberately. Returns the first
+    surviving alphanumeric run, lowercased, or "" if nothing survives.
+    """
+    w = word
+    # endnote/footnote marker welded on: "insanity.42" -> "insanity"
+    w = re.sub(r'^([A-Za-z]{2,})\.(\d{1,3})$', r'\1', w)
+    # trailing page/line marker residue: "insanep106" style
+    w = re.sub(r'^(\|?p\d{1,4})(?=[A-Za-z])', '', w)
+    # camelCase run-on: "inSanFrancisco" -> "in San Francisco" -> take "in"?
+    # No: for the TARGET we want the target token, so split then keep the run
+    # that the search prefix would have matched. Handled by caller via lemma;
+    # here we just split so the first run is clean.
+    w = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', w)
+    # sentence-boundary fusion: "insanity.He" / "insanELYjealous" boundaries
+    w = re.sub(r'(?<=[a-z])[.:;,](?=[A-Za-z])', ' ', w)
+    # boundary-less lowercase run-on has no signal; leave it, caller flags it
+    parts = [p for p in re.split(r'\s+', w) if re.search(r'[A-Za-z]', p)]
+    if not parts:
+        return ""
+    return re.sub(r'^\W+|\W+$', '', parts[0]).lower()
+
+
+def normalize_word_form(surface: str, lemma: str, pos: str, search: str) -> tuple[str, str]:
+    """Produce (word_clean, clean_status) for a matched target token.
+
+    Strategy, most-trusted signal first:
+
+      1. LEMMA. If the tagger resolved a lemma that itself begins with the
+         search prefix, trust it -- the tagger already saw the sentence and
+         stripped the junk. "insanity.he" tagged lemma "insanity" -> "insanity".
+         This is what fixes the bulk of the run-on classes for free.
+      2. REGEX. No usable lemma (blank, or doesn't match the search family):
+         fall back to rule-based surface repair. Catches endnote/punctuation
+         fusion the tagger left in the surface form.
+      3. FLAG. Neither yields something in the search family: keep the
+         lowercased surface but mark status="unresolved" so downstream can
+         filter or review. These are the boundary-less run-ons ("insanityof")
+         and genuine non-family tokens the prefix swept in ("insanitation",
+         "insanorum").
+
+    clean_status is one of: "lemma", "regex", "surface", "unresolved".
+    Returns the ORIGINAL surface untouched as the caller keeps match_word_i;
+    only word_clean is derived.
+    """
+    prefix = search.casefold().strip()
+    lem = (lemma or "").strip().lower()
+    surf = (surface or "").strip()
+
+    # 1. trust the lemma when it's in-family
+    if lem and lem.startswith(prefix) and re.fullmatch(r"[a-z]+", lem):
+        return lem, "lemma"
+
+    # 2. regex repair of the surface
+    repaired = _regex_repair_surface(surf)
+    if repaired and repaired.startswith(prefix):
+        return repaired, "regex"
+
+    # 3. clean lowercase surface, in-family but not via lemma (e.g. valid
+    #    morphology the lexicon lemma happened to collapse differently)
+    surf_low = re.sub(r'^\W+|\W+$', '', surf).lower()
+    if surf_low and surf_low.startswith(prefix) and re.fullmatch(r"[a-z]+", surf_low):
+        return surf_low, "surface"
+
+    # 4. give up: keep the lowercased surface but flag it
+    return (surf_low or surf.lower()), "unresolved"
+
+
 def prefix_bounds(value: str) -> tuple[str, str]:
     value = value.casefold()
     return value, value + "\U0010ffff"
@@ -451,60 +552,115 @@ def export_csv(
             "token_index",
             *match_fields, "context_before", "matched_text", "context_after",
             "full_context",
+            # Normalised target form + how it was derived. word_clean is what
+            # downstream plots/grouping should read; match_word_1 keeps the raw
+            # surface. clean_status in {lemma,regex,surface,unresolved} lets you
+            # filter or review the ones the tagger couldn't resolve.
+            "word_clean", "clean_status",
             # Per-window contamination scoring. Purely additive: everything
             # downstream reads columns by name, so old consumers are unaffected.
             "ctx_n_tokens", "ctx_n_at", "ctx_n_bad_pos", "ctx_max_word_id",
             "ctx_bad_forms",
         ]
-        writer = csv.DictWriter(output, fieldnames=fields)
-        writer.writeheader()
-        count = 0
-        for row in matches:
-            count += 1
-            base = dict(zip(
-                ["text_id", "document_file", "genre", "year", "document_word_count",
-                 "title", "author", "source", "token_index", *match_fields],
-                row,
-            ))
-            start = int(base["token_index"])
-            end = start + ngram_size - 1
-            nearby = connection.execute(
-                "SELECT token_index, word, word_id, pos, lemma FROM tokens "
-                "WHERE text_id=? AND token_index BETWEEN ? AND ? "
-                "ORDER BY token_index",
-                (base["text_id"], max(1, start - context_words), end + context_words),
-            ).fetchall()
-            before = " ".join(r[1] for r in nearby if r[0] < start)
-            matched = " ".join(r[1] for r in nearby if start <= r[0] <= end)
-            after = " ".join(r[1] for r in nearby if r[0] > end)
+        # Two outputs from the same rows:
+        #   csv_path                       -> CLEANED (what RoBERTa reads)
+        #   <stem>_uncleaned<suffix>       -> RAW (provenance, never touched)
+        # Both carry identical columns and identical row order/uid, so they can
+        # be joined 1:1 downstream. The cleaned file's context columns and
+        # matched_text are run through clean_context(); word_clean/clean_status
+        # are present in both (they describe the target either way).
+        uncleaned_path = csv_path.with_name(
+            csv_path.stem + "_uncleaned" + csv_path.suffix
+        )
+        with uncleaned_path.open("w", newline="", encoding="utf-8-sig") as raw_out:
+            raw_writer = csv.DictWriter(raw_out, fieldnames=fields)
+            raw_writer.writeheader()
+            writer = csv.DictWriter(output, fieldnames=fields)
+            writer.writeheader()
+            count = 0
+            for row in matches:
+                count += 1
+                base = dict(zip(
+                    ["text_id", "document_file", "genre", "year", "document_word_count",
+                     "title", "author", "source", "token_index", *match_fields],
+                    row,
+                ))
+                start = int(base["token_index"])
+                end = start + ngram_size - 1
+                nearby = connection.execute(
+                    "SELECT token_index, word, word_id, pos, lemma FROM tokens "
+                    "WHERE text_id=? AND token_index BETWEEN ? AND ? "
+                    "ORDER BY token_index",
+                    (base["text_id"], max(1, start - context_words), end + context_words),
+                ).fetchall()
+                before = " ".join(r[1] for r in nearby if r[0] < start)
+                matched = " ".join(r[1] for r in nearby if start <= r[0] <= end)
+                after = " ".join(r[1] for r in nearby if r[0] > end)
 
-            # Score the CONTEXT only -- the matched slot is scored separately by
-            # the existing match_pos_i / word_id_i columns, and folding it in
-            # here would make every row look contaminated by its own target.
-            ctx = [r for r in nearby if not (start <= r[0] <= end)]
-            n_at = sum(1 for r in ctx if r[1] == "@")
-            real = [r for r in ctx if r[1] != "@"]
-            bad = [r for r in real if is_suspect_token(r[3], r[4])]
-            base.update(
-                occurrence=count,
-                uid=f"{base['text_id']}:{start}",
-                search=search,
-                context_before=before,
-                matched_text=matched,
-                context_after=after,
-                full_context=" ".join(part for part in (before, matched, after) if part),
-                ctx_n_tokens=len(ctx),
-                ctx_n_at=n_at,
-                ctx_n_bad_pos=len(bad),
-                # wordID is also the frequency RANK in COHA's lexicon, so the
-                # rarest context token is a cheap contamination proxy: genuine
-                # vocabulary ranks in the tens of thousands, malformed hapaxes
-                # rank in the millions. Reported over non-@ tokens only.
-                ctx_max_word_id=max((r[2] for r in real), default=""),
-                ctx_bad_forms=";".join(r[1] for r in bad),
-            )
-            writer.writerow(base)
-    print(f"Wrote {count:,} matches to {csv_path}")
+                # Score the CONTEXT only -- the matched slot is scored separately
+                # by the existing match_pos_i / word_id_i columns, and folding it
+                # in here would make every row look contaminated by its own target.
+                ctx = [r for r in nearby if not (start <= r[0] <= end)]
+                n_at = sum(1 for r in ctx if r[1] == "@")
+                real = [r for r in ctx if r[1] != "@"]
+                bad = [r for r in real if is_suspect_token(r[3], r[4])]
+                # Normalise the target form(s). For a single-token search this is
+                # just slot 1; for a phrase search, clean each slot and join, so
+                # word_clean stays a faithful cleaned version of matched_text.
+                clean_parts, statuses = [], []
+                for i in range(1, ngram_size + 1):
+                    wc, st = normalize_word_form(
+                        base.get(f"match_word_{i}", ""),
+                        base.get(f"match_lemma_{i}", ""),
+                        base.get(f"match_pos_{i}", ""),
+                        search.split()[i - 1] if i - 1 < len(search.split()) else search,
+                    )
+                    clean_parts.append(wc)
+                    statuses.append(st)
+                word_clean = " ".join(p for p in clean_parts if p)
+                # worst-case status wins: a phrase is only "clean" if all slots are
+                status_rank = {"lemma": 0, "regex": 1, "surface": 2, "unresolved": 3}
+                clean_status = max(statuses, key=lambda s: status_rank.get(s, 3))
+
+                base.update(
+                    occurrence=count,
+                    uid=f"{base['text_id']}:{start}",
+                    search=search,
+                    word_clean=word_clean,
+                    clean_status=clean_status,
+                    context_before=before,
+                    matched_text=matched,
+                    context_after=after,
+                    full_context=" ".join(p for p in (before, matched, after) if p),
+                    ctx_n_tokens=len(ctx),
+                    ctx_n_at=n_at,
+                    ctx_n_bad_pos=len(bad),
+                    # wordID is also the frequency RANK in COHA's lexicon, so the
+                    # rarest context token is a cheap contamination proxy: genuine
+                    # vocabulary ranks in the tens of thousands, malformed hapaxes
+                    # rank in the millions. Reported over non-@ tokens only.
+                    ctx_max_word_id=max((r[2] for r in real), default=""),
+                    ctx_bad_forms=";".join(r[1] for r in bad),
+                )
+
+                # RAW row goes to the uncleaned file exactly as built.
+                raw_writer.writerow(base)
+
+                # CLEANED row: same dict, but context columns run through
+                # clean_context() so the saved file is what RoBERTa will read.
+                cleaned = dict(base)
+                cb = clean_context(before)
+                mt = clean_context(matched)
+                ca = clean_context(after)
+                cleaned.update(
+                    context_before=cb,
+                    matched_text=mt,
+                    context_after=ca,
+                    full_context=" ".join(p for p in (cb, mt, ca) if p),
+                )
+                writer.writerow(cleaned)
+    print(f"Wrote {count:,} matches to {csv_path} (cleaned) "
+          f"and {uncleaned_path} (raw)")
     return count
 
 

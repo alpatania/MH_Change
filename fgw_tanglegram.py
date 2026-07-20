@@ -52,7 +52,9 @@ def parse_args():
         description="Tree-structure-preserving tanglegram across decades.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--out-dir", default=None,
+                        help="Directory holding this search's outputs "
+                             "(default: results/<search>/)")
     parser.add_argument("--search", required=True)
     parser.add_argument("--top-k", type=int, default=1,
                         help="Links considered per node when computing "
@@ -76,7 +78,9 @@ def parse_args():
                              "than drawing its internal chaining structure "
                              "in full detail (default 0.10; 0 disables "
                              "collapsing and draws every leaf individually)")
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", default=None,
+                        help="Output HTML (default: "
+                             "<out-dir>/<search>_tanglegram.html)")
     return parser.parse_args()
 
 
@@ -266,7 +270,12 @@ def get_pair_matches(T: np.ndarray, top_k: int,
 
 def main():
     args = parse_args()
-    out_dir = Path(args.out_dir)
+    # Resolve search-derived defaults: out-dir -> results/<search>/,
+    # output -> <out-dir>/<search>_tanglegram.html.
+    search_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", args.search)
+    out_dir = Path(args.out_dir) if args.out_dir else Path("results") / search_slug
+    if args.output is None:
+        args.output = str(out_dir / f"{args.search}_tanglegram.html")
 
     decades = discover_decades(out_dir, args.search)
     if not decades:

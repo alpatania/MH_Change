@@ -33,7 +33,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 SCRIPT="$SCRIPT_DIR/coha_build.py"
-OUT_DIR="results"
+OUT_DIR=""
+OUT_DIR_EXPLICIT=""
 CONTEXT=20
 GENRE=""
 DB_DIR=""
@@ -51,7 +52,7 @@ while [ $# -gt 0 ]; do
     --sources-txt) SOURCES_TXT="$2"; shift 2 ;;
     --search) SEARCH="$2"; shift 2 ;;
     --genre) GENRE="$2"; shift 2 ;;
-    --out-dir) OUT_DIR="$2"; shift 2 ;;
+    --out-dir) OUT_DIR="$2"; OUT_DIR_EXPLICIT=1; shift 2 ;;
     --script) SCRIPT="$2"; shift 2 ;;
     --context) CONTEXT="$2"; shift 2 ;;
     --pos-filter) POS_FILTER="$2"; shift 2 ;;
@@ -66,8 +67,17 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$DB_DIR" ] || [ -z "$LEXICON_TXT" ] || [ -z "$SOURCES_TXT" ] || [ -z "$SEARCH" ]; then
-  echo "Usage: $0 --db-dir DIR --lexicon-txt FILE --sources-txt FILE --search WORD [--genre G] [--out-dir DIR] [--script PATH] [--context N] [--list-only]" >&2
+  echo "Usage: $0 --db-dir DIR --lexicon-txt FILE --sources-txt FILE --search WORD [--genre G] [--out-dir DIR] [--script PATH] [--context N] [--pos-filter TAGS] [--rebuild] [--list-only]" >&2
   exit 1
+fi
+
+# Per-search home: unless --out-dir was given explicitly, everything for this
+# search lands in results/<search-slug>/ so distinct searches never collide and
+# a whole search can be archived or deleted as one folder. Files keep the
+# <search>_ prefix inside the folder, so they stay self-identifying if moved.
+SEARCH_SLUG=$(printf '%s' "$SEARCH" | tr -c 'A-Za-z0-9_-' '_')
+if [ -z "$OUT_DIR_EXPLICIT" ]; then
+  OUT_DIR="${OUT_DIR_BASE:-results}/${SEARCH_SLUG}"
 fi
 
 if [ ! -d "$DB_DIR" ]; then
@@ -100,7 +110,6 @@ if [ "$LIST_ONLY" -eq 1 ]; then
 fi
 
 mkdir -p "$OUT_DIR"
-SEARCH_SLUG=$(printf '%s' "$SEARCH" | tr -c 'A-Za-z0-9_-' '_')
 
 FAILED=""
 for DECADE in $DECADES; do

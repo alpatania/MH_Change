@@ -26,9 +26,9 @@ z-score is trustworthy).
 ```bash
 # characterise the noise floor at n=59, pooled across three "quiet" pairs
 python fgw_subsample_diagnostic.py \
-    --pair results/insan_1950s_embeddings.npy:results/insan_1960s_embeddings.npy \
-    --pair results/insan_1960s_embeddings.npy:results/insan_1970s_embeddings.npy \
-    --pair results/insan_1980s_embeddings.npy:results/insan_1990s_embeddings.npy \
+    --pair results/insan/insan_1950s_embeddings.npy:results/insan/insan_1960s_embeddings.npy \
+    --pair results/insan/insan_1960s_embeddings.npy:results/insan/insan_1970s_embeddings.npy \
+    --pair results/insan/insan_1980s_embeddings.npy:results/insan/insan_1990s_embeddings.npy \
     --target-n 59 --n-trials 200
 
 # then test one observed structure cost against that floor
@@ -60,8 +60,8 @@ cross-tabulates them against the lexical contamination columns
 
 ```bash
 python bridge_diagnostic.py \
-    --emb  results/insan_1990s_embeddings.npy \
-    --meta results/insan_1990s_coords.csv
+    --emb  results/insan/insan_1990s_embeddings.npy \
+    --meta results/insan/insan_1990s_coords.csv
 ```
 
 The two scores are independent — one purely geometric, one purely lexical — so
@@ -90,11 +90,11 @@ if you want the fuller picture.
 
 ```bash
 python fgw_correspondence.py \
-    --transport-matrix results/insan_fgw_1820_1830_transport_matrix.npy \
-    --meta1 results/insan_1820s_coords.csv \
-    --meta2 results/insan_1830s_coords.csv \
+    --transport-matrix results/insan/insan_fgw_1820_1830_transport_matrix.npy \
+    --meta1 results/insan/insan_1820s_coords.csv \
+    --meta2 results/insan/insan_1830s_coords.csv \
     --top-k 1 \
-    --output results/insan_1820_1830_correspondence.csv
+    --output results/insan/insan_1820_1830_correspondence.csv
 ```
 
 `--min-mass-fraction` (default 0.1) sets the same unmatched threshold
@@ -114,7 +114,7 @@ to read for dense decades.
 ```bash
 python fgw_sankey_diagram.py \
     --out-dir results --search insan \
-    --output results/insan_sankey_occurrences.html
+    --output results/insan/insan_sankey_occurrences.html
 ```
 
 ---
@@ -133,7 +133,7 @@ candidates.
 ```bash
 python token_count_sweep.py \
     --terms-csv search_terms.csv \
-    --sqlite-dir results \
+    --sqlite-dir results/insan \
     --out-csv token_counts.csv \
     --floor 50
 ```

@@ -144,17 +144,31 @@ def load_data(
     """
     peek = pd.read_csv(path, nrows=0, dtype=str)
     cols = [c.strip() for c in peek.columns]
-    has_named_cols = all(c in cols for c in [wid_col, word_col, passage_col])
+
+    # The word column: prefer the upstream-cleaned `word_clean` if the CSV has
+    # it (coha_build.py now emits it), unless the caller pinned a specific
+    # --word-col. This is what makes INSANE/Insane/insane share one group and
+    # folds the malformed forms, WITHOUT re-cleaning here -- the cleaning
+    # already happened upstream and is saved in the file.
+    effective_word_col = word_col
+    if word_col == 'matched_text' and 'word_clean' in cols:
+        effective_word_col = 'word_clean'
+        print("  Using pre-cleaned 'word_clean' column for grouping "
+              "(cleaning done upstream in coha_build.py).")
+
+    has_named_cols = all(c in cols for c in [wid_col, effective_word_col, passage_col])
 
     if has_named_cols:
         df = pd.read_csv(path, header=0, dtype=str)
         df.columns = [c.strip() for c in df.columns]
-        df = df.rename(columns={wid_col: 'wid', word_col: 'word', passage_col: 'passage'})
+        df = df.rename(columns={wid_col: 'wid', effective_word_col: 'word',
+                                passage_col: 'passage'})
     else:
         if cols and not cols[0].replace('-', '').replace('_', '').isdigit():
             raise ValueError(
                 f"Expected columns not found in CSV.\n"
-                f"  Looking for: wid={wid_col!r}, word={word_col!r}, passage={passage_col!r}\n"
+                f"  Looking for: wid={wid_col!r}, word={effective_word_col!r}, "
+                f"passage={passage_col!r}\n"
                 f"  Available:   {cols}\n"
                 f"Use --wid-col, --word-col, --passage-col to specify the correct names."
             )
@@ -168,11 +182,13 @@ def load_data(
     if target_word:
         df = df[df['word'].str.lower() == target_word.lower()]
 
+    # In-script cleaning is now an OPT-IN fallback for legacy CSVs that predate
+    # upstream cleaning. By default the file is already clean (context via
+    # clean_context, target via word_clean), so re-cleaning is a no-op at best
+    # and, for the target, would re-lowercase an already-final value. Enable
+    # only with --clean-in-script when feeding an old *_uncleaned-style CSV.
     if apply_cleaning:
         df['passage'] = df['passage'].apply(clean_passage)
-        # Must repair `word` with the SAME rules, or find_target_token_span()
-        # searches the cleaned passage for an uncleaned target and the row is
-        # silently dropped.
         df['word'] = df['word'].apply(clean_word)
 
     df = df.dropna(subset=['wid', 'word', 'passage']).reset_index(drop=True)
@@ -458,8 +474,12 @@ def main():
     p.add_argument('--clusters',     default=None, type=int,
                    help='Number of k-means clusters')
     p.add_argument('--cosine-matrix', action='store_true')
-    p.add_argument('--no-clean',     action='store_true',
-                   help='Disable @ token removal AND malformed-token repair')
+    p.add_argument('--clean-in-script', action='store_true',
+                   help='Re-run @-removal and malformed-token repair inside '
+                        'this script. OFF by default: coha_build.py now cleans '
+                        'context (clean_context) and target (word_clean) '
+                        'upstream, so the CSV is already model-ready. Enable '
+                        'only for legacy/uncleaned CSVs that lack word_clean.')
     p.add_argument('--device',       default='cpu', choices=['cpu', 'cuda'])
     p.add_argument('--output',       default=None)
     # UMAP-on-PCA parameters (separate from --method umap, which controls the
@@ -539,7 +559,7 @@ def main():
         df = load_data(
             args.input, args.word,
             wid_col=args.wid_col, word_col=args.word_col, passage_col=args.passage_col,
-            apply_cleaning=not args.no_clean,
+            apply_cleaning=args.clean_in_script,
         )
         if df.empty:
             print('No data found.')
