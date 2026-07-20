@@ -35,11 +35,17 @@ python fgw_tanglegram.py --search insan
 python fgw_sankey.py --search insan
 ```
 
-All outputs land in `results/insan/`, each file prefixed `insan_`. To rerun
+All outputs land in `./results/insan/`, each file prefixed `insan_`. To rerun
 just the embeddings and distances after changing something upstream, the whole
 command is `./run_embedding_and_distance.sh --search insan` — no paths to
-repeat. Every default can still be overridden (`--out-dir`, `--csv-dir`,
-`--output`, etc.) when you need a non-standard location.
+repeat.
+
+`--out-dir` sets the **base** location under which the `results/<search>/`
+tree is created; it defaults to the current directory (`.`). So
+`--out-dir /data/experiments` writes to
+`/data/experiments/results/insan/`. Because `results/<search>/` is always
+appended, two searches can never collide in one flat folder regardless of the
+base you choose.
 
 ---
 
@@ -279,4 +285,4 @@ Run `uv sync` on the login node (which has network), not inside a batch job.
 The scripts above are the production pipeline. A second tier checks whether the
 results are real — noise floors, corpus-size bias, single-linkage chaining, and
 readable correspondence tables — documented separately in
-**`README_diagnostics.md`**.
+**`diagnostic\README.md`**.

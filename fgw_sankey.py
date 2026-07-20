@@ -949,9 +949,8 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--out-dir", type=Path, default=None,
-                   help="Directory holding linkage.npy, coords.csv, and "
-                        "transport_matrix.npy files "
-                        "(default: results/<search>/).")
+                   help="Base location for the results tree; inputs/outputs "
+                        "use <out-dir>/results/<search>/ (default: ./).")
     p.add_argument("--search", required=True,
                    help="Search term prefix for input files.")
     p.add_argument("--output", type=Path, default=None,
@@ -1081,10 +1080,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # Resolve search-derived defaults: out-dir -> results/<search>/,
-    # output -> <out-dir>/<search>_sankey.html.
+    # Resolve search-derived paths: <out-dir>/results/<search>/, where --out-dir
+    # is the base location (default: current directory).
     search_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", args.search)
-    out_dir = args.out_dir if args.out_dir else Path("results") / search_slug
+    base = args.out_dir if args.out_dir else Path(".")
+    out_dir = base / "results" / search_slug
     args.out_dir = out_dir
     if args.output is None:
         args.output = out_dir / f"{args.search}_sankey.html"

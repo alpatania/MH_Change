@@ -133,13 +133,17 @@ if [ -z "$SEARCH" ]; then
   exit 1
 fi
 
-# Per-search home: default both csv-dir (where stage 1 wrote) and out-dir (where
-# stage 2/3 write) to results/<search>/, so the only required argument is
-# --search. Either can still be overridden explicitly.
+# Per-search home: <out-dir>/results/<search>/. --out-dir is the BASE location
+# (default: current directory); results/<search>/ is always appended. Both the
+# csv-dir (where stage 1 wrote) and out-dir (where stage 2/3 write) resolve to
+# the same per-search folder, so --search is the only required argument.
 SEARCH_SLUG=$(printf '%s' "$SEARCH" | tr -c 'A-Za-z0-9_-' '_')
-DEFAULT_DIR="${OUT_DIR_BASE:-results}/${SEARCH_SLUG}"
-[ -z "$CSV_DIR" ] && CSV_DIR="$DEFAULT_DIR"
-[ -z "$OUT_DIR" ] && OUT_DIR="$DEFAULT_DIR"
+BASE_DIR="${OUT_DIR:-.}"
+RESULT_DIR="${BASE_DIR}/results/${SEARCH_SLUG}"
+# --csv-dir may still be overridden to read inputs from elsewhere; otherwise it
+# tracks the same per-search folder.
+[ -z "$CSV_DIR" ] && CSV_DIR="$RESULT_DIR"
+OUT_DIR="$RESULT_DIR"
 
 
 if [ ! -d "$CSV_DIR" ]; then

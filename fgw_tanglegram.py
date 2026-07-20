@@ -53,8 +53,8 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--out-dir", default=None,
-                        help="Directory holding this search's outputs "
-                             "(default: results/<search>/)")
+                        help="Base location for the results tree; outputs go to "
+                             "<out-dir>/results/<search>/ (default: ./)")
     parser.add_argument("--search", required=True)
     parser.add_argument("--top-k", type=int, default=1,
                         help="Links considered per node when computing "
@@ -270,10 +270,11 @@ def get_pair_matches(T: np.ndarray, top_k: int,
 
 def main():
     args = parse_args()
-    # Resolve search-derived defaults: out-dir -> results/<search>/,
-    # output -> <out-dir>/<search>_tanglegram.html.
+    # Resolve search-derived paths: <out-dir>/results/<search>/, where --out-dir
+    # is the base location (default: current directory).
     search_slug = re.sub(r"[^A-Za-z0-9_-]+", "_", args.search)
-    out_dir = Path(args.out_dir) if args.out_dir else Path("results") / search_slug
+    base = Path(args.out_dir) if args.out_dir else Path(".")
+    out_dir = base / "results" / search_slug
     if args.output is None:
         args.output = str(out_dir / f"{args.search}_tanglegram.html")
 

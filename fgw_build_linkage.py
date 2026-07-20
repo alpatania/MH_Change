@@ -48,8 +48,9 @@ def parse_args():
                              "this search. Reads/writes results/<search>/ "
                              "unless --out-dir is given.")
     parser.add_argument("--out-dir", default=None,
-                        help="Directory holding the embeddings (default: "
-                             "results/<search>/). Batch mode only.")
+                        help="Base location for the results tree; embeddings "
+                             "read from <out-dir>/results/<search>/ "
+                             "(default: ./). Batch mode only.")
     parser.add_argument("--emb", default=None,
                         help="Single mode: one <decade>_embeddings.npy.")
     parser.add_argument("--output", default=None,
@@ -93,7 +94,8 @@ def main():
     if not args.search:
         raise SystemExit("ERROR: give either --search (batch) or --emb (single).")
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", args.search)
-    out_dir = Path(args.out_dir) if args.out_dir else Path("results") / slug
+    base = Path(args.out_dir) if args.out_dir else Path(".")
+    out_dir = base / "results" / slug
     if not out_dir.is_dir():
         raise SystemExit(f"ERROR: {out_dir} is not a directory. Run stage 2 first.")
 
