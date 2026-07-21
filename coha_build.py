@@ -337,6 +337,119 @@ def build_database(
 SUSPECT_POS = {"fo", "fu", "null"}
 
 
+# --- run-on splitter --------------------------------------------------------
+# COHA has boundary-less run-ons ("insanewould", "nightgownssoft") that carry
+# no case or punctuation signal, so regex can't split them -- you have to KNOW
+# the words. We use WordNet (with lemmatization, so plurals/inflections like
+# "nightgowns" are recognised via "nightgown") as the dictionary, and restrict
+# to a SINGLE split point, because the actual corruption is one dropped space.
+# Both constraints matter: lemmatization stops real compounds being shattered,
+# and the two-piece limit stops multi-fragment garbage ("in saner sil lier").
+#
+# Degrades gracefully: if NLTK or its corpora aren't installed, _WORDNET_OK is
+# False and split_runon is a no-op, so the pipeline still runs (just without
+# run-on splitting). Install with:  python -m nltk.downloader wordnet omw-1.4
+
+# Function words WordNet lacks as synsets but which are obviously real, so a
+# split like "insane|would" isn't rejected just because "would" has no synset.
+_FUNCTION_WORDS = set("""
+a an the and or but would could should will shall may might must can of to in
+on at by for with as is are was were be been being this that these those he she
+it they we you i his her its their our your my me him them us not no so if then
+than when where who whom which what have has had do does did
+""".split())
+
+try:
+    from nltk.corpus import wordnet as _wn
+    from nltk.corpus import words as _wl
+    from nltk.stem import WordNetLemmatizer as _WNL
+    _wn.ensure_loaded()
+    _LEMMATIZER = _WNL()
+    _WORDLIST = set(w.lower() for w in _wl.words())
+    _WORDNET_OK = True
+    _NLTK_WARNING = None
+except ImportError:
+    # NLTK itself isn't installed.
+    _WORDNET_OK = False
+    _WORDLIST = set()
+    _NLTK_WARNING = (
+        "NLTK is not installed, so run-on splitting is DISABLED -- tokens like "
+        "'insanewould' will be left unsplit and 'clean_status' will never be "
+        "'split'.\n"
+        "  Fix:  uv add nltk  &&  uv run python -m nltk.downloader wordnet omw-1.4 words"
+    )
+except LookupError as _e:
+    # NLTK is installed but a required corpus (wordnet / omw-1.4 / words)
+    # hasn't been downloaded. This is the common case after `uv add nltk`
+    # alone, and the one that silently produced unsplit output before.
+    _WORDNET_OK = False
+    _WORDLIST = set()
+    _NLTK_WARNING = (
+        "NLTK is installed but its corpora are missing, so run-on splitting is "
+        "DISABLED -- tokens like 'insanewould' will be left unsplit and "
+        "'clean_status' will never be 'split'.\n"
+        "  Fix:  uv run python -m nltk.downloader wordnet omw-1.4 words\n"
+        f"  (underlying error: {_e})"
+    )
+except Exception as _e:
+    _WORDNET_OK = False
+    _WORDLIST = set()
+    _NLTK_WARNING = (
+        f"Run-on splitting is DISABLED due to an unexpected NLTK error: {_e}"
+    )
+
+
+def _is_known_word(w: str) -> bool:
+    """True if w is a real word. Uses TWO dictionaries because neither alone is
+    right: WordNet omits most indefinite pronouns ("something", "himself") and
+    function words, while the 235k `words` list includes them. A word passing
+    EITHER is accepted. The permissiveness this adds (obscure fragments like
+    "sil" are in the words list) is contained by split_runon's two-piece limit,
+    which won't fragment a token into more than two known pieces.
+    """
+    w = w.lower()
+    if w in _FUNCTION_WORDS:
+        return True
+    if not _WORDNET_OK:
+        return False
+    if w in _WORDLIST:
+        return True
+    if _wn.synsets(w):
+        return True
+    for pos in ("n", "v", "a", "r"):
+        if _wn.synsets(_LEMMATIZER.lemmatize(w, pos)):
+            return True
+    return False
+
+
+def split_runon(token: str, lemma: str = "", min_piece: int = 3) -> list[str]:
+    """Split a boundary-less run-on into exactly two known words, or return
+    [token] unchanged. Guards, each closing a specific failure mode:
+
+      - capitalized tokens are skipped (proper nouns like "Gaddon" that no
+        dictionary reliably contains);
+      - tokens that are themselves known words are kept whole;
+      - tagger-resolved tokens (non-empty known lemma) are kept whole;
+      - EXACTLY one split point is tried, matching the actual corruption (a
+        single dropped space) and preventing multi-fragment garbage.
+    """
+    if not _WORDNET_OK:
+        return [token]
+    if token[:1].isupper():        # proper-noun guard
+        return [token]
+    low = token.lower()
+    if not low.isalpha():          # digits/punct -> handled by regex rules
+        return [token]
+    if _is_known_word(low):        # real word: keep whole
+        return [token]
+    if lemma and lemma.strip() and _is_known_word(lemma):
+        return [token]
+    for i in range(min_piece, len(low) - min_piece + 1):
+        if _is_known_word(low[:i]) and _is_known_word(low[i:]):
+            return [token[:i], token[i:]]   # preserve original casing
+    return [token]
+
+
 def is_suspect_token(pos: str, lemma: str) -> bool:
     """Flag a context token the tagger failed to resolve.
 
@@ -369,7 +482,12 @@ def clean_context_token(tok: str) -> str:
     tok = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', tok)
     # sentence-boundary fusion: "them:First" -> "them : First"
     tok = re.sub(r'(?<=[a-z])([.:;,])(?=[A-Z])', r' \1 ', tok)
-    return tok
+    # boundary-less run-on ("nightgownssoft"): dictionary two-piece split.
+    # Applied per whitespace-piece so it composes with the regex splits above.
+    out = []
+    for piece in tok.split():
+        out.extend(split_runon(piece) if piece.isalpha() else [piece])
+    return " ".join(out) if out else tok
 
 
 def clean_context(text: str) -> str:
@@ -440,18 +558,35 @@ def normalize_word_form(surface: str, lemma: str, pos: str, search: str) -> tupl
     if lem and lem.startswith(prefix) and re.fullmatch(r"[a-z]+", lem):
         return lem, "lemma"
 
-    # 2. regex repair of the surface
+    # 2. regex repair of the surface -- but only accept it if it actually
+    #    CHANGED the surface. Otherwise a clean run-on like "insanewould"
+    #    passes the prefix check unchanged and short-circuits the splitter.
     repaired = _regex_repair_surface(surf)
+    if repaired and repaired.startswith(prefix) and repaired != surf.lower():
+        return repaired, "regex"
+
+    # 3. dictionary run-on split ("insanewould" -> insane|would): keep the
+    #    piece that begins with the search prefix, so the target is recovered
+    #    from a boundary-less run-on the regex rules couldn't touch.
+    pieces = split_runon(surf)
+    if len(pieces) > 1:
+        for pc in pieces:
+            pc_low = pc.lower()
+            if pc_low.startswith(prefix) and re.fullmatch(r"[a-z]+", pc_low):
+                return pc_low, "split"
+
+    # 3b. regex repair that merely lowercased/trimmed (no structural change)
+    #     is still fine to accept now that the splitter has had its chance.
     if repaired and repaired.startswith(prefix):
         return repaired, "regex"
 
-    # 3. clean lowercase surface, in-family but not via lemma (e.g. valid
+    # 4. clean lowercase surface, in-family but not via lemma (e.g. valid
     #    morphology the lexicon lemma happened to collapse differently)
     surf_low = re.sub(r'^\W+|\W+$', '', surf).lower()
     if surf_low and surf_low.startswith(prefix) and re.fullmatch(r"[a-z]+", surf_low):
         return surf_low, "surface"
 
-    # 4. give up: keep the lowercased surface but flag it
+    # 5. give up: keep the lowercased surface but flag it
     return (surf_low or surf.lower()), "unresolved"
 
 
@@ -708,11 +843,30 @@ def parse_args() -> argparse.Namespace:
         "'NN' matches NN/NN1/NN2/NNL/NNO. Omit to disable filtering.",
     )
     parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--require-nltk", action="store_true",
+                        help="Abort if NLTK/its corpora are unavailable, "
+                             "instead of continuing with run-on splitting "
+                             "disabled. Use for reproducible batch runs where "
+                             "silently-unsplit output would be a problem.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    # Loudly warn if run-on splitting is unavailable. This is the difference
+    # between 'insanewould' being split vs left whole, and it failed silently
+    # before -- so surface it at the top of every run, and allow --require-nltk
+    # to make it a hard error for reproducible batch runs.
+    if _NLTK_WARNING:
+        banner = "=" * 70
+        print(f"\n{banner}\nWARNING: {_NLTK_WARNING}\n{banner}\n",
+              file=sys.stderr)
+        if getattr(args, "require_nltk", False):
+            raise SystemExit(
+                "Aborting because --require-nltk was set and run-on splitting "
+                "is unavailable (see warning above).")
+
     if args.context < 0:
         raise ValueError("--context must be zero or greater")
     if args.decade is not None and args.decade % 10 != 0:

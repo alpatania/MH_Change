@@ -43,8 +43,7 @@ decade transport matrices produced by earlier pipeline steps:
     <out-dir>/<search>_fgw_<d1>_<d2>_transport_matrix.npy  (FGW_distance.py)
 
 Usage:
-    python fgw_sankey.py --out-dir results --search depression \\
-        --output results/depression_sankey.html
+    python fgw_sankey.py --search depression
 """
 
 from __future__ import annotations
@@ -439,12 +438,15 @@ def _clean_lemma(v) -> str:
 
 
 def lemma_column(meta: pd.DataFrame) -> pd.Series:
-    """Return a Series of best-effort canonical lemma per row, casefolded.
-    Prefers a 'lemma' or 'match_lemma_1' column if present; falls back to
-    'word' (also casefolded). Robust to NaN, mixed dtypes, and the pandas
-    pyarrow string backend (which preserves NaN through .astype(str)).
+    """Return a Series of best-effort canonical word per row, casefolded.
+
+    Prefers the cleaned 'word' column (== word_clean from coha_build.py, which
+    is also what the tanglegram and the shared colour map key on) so cluster
+    labels, colours, and the tanglegram all agree. Falls back to 'lemma' /
+    'match_lemma_1' only if 'word' is absent (older CSVs). Robust to NaN, mixed
+    dtypes, and the pyarrow string backend.
     """
-    for col in ("lemma", "match_lemma_1", "word"):
+    for col in ("word", "lemma", "match_lemma_1"):
         if col in meta.columns:
             return meta[col].map(_clean_lemma)
     return pd.Series([""] * len(meta), index=meta.index)
@@ -509,23 +511,34 @@ def assign_colors_by_lemma(
                 members, dominance_threshold,
             )
 
-    # Rank distinct dominant lemmas by summed cluster mass. Tie-break
-    # alphabetically so runs are deterministic.
-    lemma_totals: dict[str, int] = defaultdict(int)
-    for (decade, cid), lemma in dominant_by_cluster.items():
-        if lemma is not None:
-            lemma_totals[lemma] += sizes_by_decade[decade][cid]
-    ranked = sorted(lemma_totals.items(), key=lambda kv: (-kv[1], kv[0]))
-    palette_cap = min(max_legend_colors, len(PALETTE))
-    top_lemmas = [l for l, _ in ranked[:palette_cap]]
-    lemma_to_color = {l: PALETTE[i] for i, l in enumerate(top_lemmas)}
+    # Colour each cluster by its dominant word, using the SHARED
+    # frequency-ranked Okabe-Ito map (fgw_colors) rather than a sankey-local
+    # ranking. This is what makes 'insane' the identical colour in the sankey
+    # and the tanglegram: same palette, same global frequency ranking, same
+    # cleaned-word key. The sankey still decides WHICH word dominates each
+    # cluster (via _dominant_lemma); it just looks the colour up in the shared
+    # map instead of ranking by cluster mass.
+    from fgw_colors import build_color_map, color_for, OVERFLOW_GREY, OKABE_ITO
+
+    shared_map, legend_order = build_color_map(
+        [meta_by_decade[d] for d in decades], word_col="word")
 
     colors: dict[tuple[int, int], str] = {}
+    used_words: dict[str, str] = {}          # cleaned word -> colour, for legend
+    lemma_totals: dict[str, int] = defaultdict(int)
     for (decade, cid), lemma in dominant_by_cluster.items():
-        if lemma is not None and lemma in lemma_to_color:
-            colors[(decade, cid)] = lemma_to_color[lemma]
-        else:
+        if lemma is None:
             colors[(decade, cid)] = OTHER_COLOR
+            continue
+        lemma_totals[lemma] += sizes_by_decade[decade][cid]
+        col = color_for(lemma, shared_map)
+        colors[(decade, cid)] = col
+        if col != OVERFLOW_GREY:
+            used_words[str(lemma).strip().casefold()] = col
+
+    # Legend in shared frequency order, restricted to words that actually
+    # appear as a cluster's dominant word here.
+    lemma_to_color = {w: shared_map[w] for w in legend_order if w in used_words}
     return colors, lemma_to_color, dict(lemma_totals)
 
 
@@ -965,7 +978,7 @@ def parse_args():
                         "Recommended for paper figures -- vector format, "
                         "scales cleanly at any resolution.")
 
-    p.add_argument("--clustering", default="ultrametric",
+    p.add_argument("--clustering", default="hdbscan",
                    choices=["ultrametric", "hdbscan"],
                    help="Clustering method. 'ultrametric' (default) cuts "
                         "each decade's single-linkage linkage.npy at a "
@@ -1053,14 +1066,14 @@ def parse_args():
                         "labels bleed into adjacent columns. Note: uses "
                         "Plotly annotations because go.Sankey has no "
                         "native textangle; hover still works normally.")
-    p.add_argument("--decade-labels", default="top",
+    p.add_argument("--decade-labels", default="bottom",
                    choices=["top", "bottom", "both", "none"],
                    help="Where to place the '<decade>s' column labels "
                         "(default top). Use 'bottom' when --label-angle is "
                         "-90, since vertical node labels extend upward from "
                         "each column and collide with top-placed decade "
                         "labels.")
-    p.add_argument("--order-by", default="barycentric",
+    p.add_argument("--order-by", default="color",
                    choices=["barycentric", "color"],
                    help="How to order clusters vertically within each "
                         "decade column. 'barycentric' (default): place each "
@@ -1074,7 +1087,7 @@ def parse_args():
                         "'continuity' colors don't have a natural priority "
                         "order.")
     p.add_argument("--width", type=int, default=1600)
-    p.add_argument("--height", type=int, default=700)
+    p.add_argument("--height", type=int, default=300)
     return p.parse_args()
 
 

@@ -549,6 +549,34 @@ def main():
                 for c in ('pc1', 'pc2', 'pc3'):
                     if c in meta.columns:
                         meta = meta.drop(columns=c)
+                # IMPORTANT: the cached coords.csv holds the word labels from a
+                # PREVIOUS run. If the upstream cleaning (word_clean) has since
+                # changed, those labels are stale -- reusing the expensive BERT
+                # matrix is fine, but the cheap labels must be refreshed from
+                # the current source CSV, matched by row order (uid if present).
+                # Without this, a cache hit silently plots pre-cleaning labels.
+                try:
+                    src = pd.read_csv(args.input, dtype=str)
+                    src.columns = [c.strip() for c in src.columns]
+                    label_col = ('word_clean' if 'word_clean' in src.columns
+                                 else args.word_col if args.word_col in src.columns
+                                 else None)
+                    if label_col and len(src) == len(meta):
+                        refreshed = src[label_col].astype(str)
+                        if 'word' not in meta.columns or \
+                                not meta['word'].astype(str).equals(refreshed):
+                            print(f"  Refreshing 'word' labels from "
+                                  f"{label_col!r} in the source CSV "
+                                  f"(cached labels were stale).")
+                            meta['word'] = refreshed.values
+                    elif label_col and len(src) != len(meta):
+                        print(f"  WARNING: source CSV has {len(src)} rows but "
+                              f"cached coords has {len(meta)}; cannot refresh "
+                              f"labels safely. Delete the cache to rebuild.",
+                              file=sys.stderr)
+                except Exception as e:
+                    print(f"  Note: could not refresh labels from source "
+                          f"({e}); using cached labels.", file=sys.stderr)
                 target_word = args.word or (
                     meta['word'].iloc[0] if 'word' in meta.columns and len(meta)
                     else 'unknown'

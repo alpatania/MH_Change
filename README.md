@@ -108,7 +108,7 @@ file:
 
 Both carry identical columns and identical row order/`uid`, so they join 1:1.
 The cleaned file adds `word_clean` (the normalised target) and `clean_status`
-(how it was derived: `lemma`, `regex`, `surface`, or `unresolved`), plus the
+(how it was derived: `lemma`, `regex`, `split`, `surface`, or `unresolved`), plus the
 contamination-scoring columns (`ctx_n_at`, `ctx_n_bad_pos`, `ctx_max_word_id`)
 used by the diagnostics.
 
@@ -197,26 +197,52 @@ individual failures. See its module docstring for the argument list.
 
 ## Word-form and context normalisation
 
-Normalisation now happens **upstream in `coha_build.py`**, saved into the
-cleaned `*_results.csv`, so every downstream consumer reads the same clean
-values.
+Normalisation happens **upstream in `coha_build.py`**, saved into the cleaned
+`*_results.csv`, so every downstream consumer reads the same clean values.
 
-The target form is normalised lemma-first: because COHA's tagger already
-resolved most malformed tokens to a clean lemma, `insanity.42`, `insanit4`,
-`insaneand`, and `insanityof` all fold to their base form, while case variants
-collapse (`INSANE`/`Insane`/`insane` → `insane`) and morphology is preserved
-(`insane` / `insanity` / `insanely` stay distinct). The `clean_status` column
-records how each was resolved; the small tail marked `regex` or `unresolved` is
-your review list — typically OCR garbage to drop and real compounds
-(`insane-asylum`) to keep. Nothing is folded blindly, and the raw surface form
-is always preserved in `match_word_1` and in the uncleaned CSV.
+The target form is resolved through a ladder, most-trusted signal first, and
+the `clean_status` column records which rung each row landed on:
 
-Context is cleaned the same way: `@` redaction runs are stripped and malformed
-tokens repaired before the passage is saved. Note that stripping a `@` run
-splices the two sides together — the result reads fluently but is missing the
-redacted words — so the `ctx_n_at` column records how many `@` tokens a window
-contained, keeping contaminated windows countable. Roughly a quarter of
-±20-token windows intersect a redaction block.
+1. **`lemma`** — the tagger already resolved a clean in-family lemma. Because
+   COHA's tagger saw the full sentence, this handles most malformed tokens for
+   free: `insanity.42`, `insanit4`, `insaneand`, `insanityof` all fold to their
+   base form, case variants collapse (`INSANE`/`Insane`/`insane` → `insane`),
+   and morphology is preserved (`insane` / `insanity` / `insanely` stay
+   distinct).
+2. **`regex`** — no usable lemma, but rule-based repair of the surface form
+   recovers it (endnote/punctuation fusion, camelCase, page-marker residue).
+3. **`split`** — a boundary-less run-on the rules can't touch
+   (`insanewould`, `insanegiggle`), resolved by a dictionary splitter (below).
+4. **`surface` / `unresolved`** — a clean in-family surface form, or a token
+   nothing could resolve. The `unresolved` tail is your review list: typically
+   OCR garbage to drop and real compounds (`insane-asylum`) to keep.
+
+Nothing is folded blindly, and the raw surface form is always preserved in
+`match_word_1` and in the uncleaned CSV.
+
+**The run-on splitter.** COHA has run-ons with no case or punctuation signal —
+`insanewould` (a dropped space), `nightgownssoft`, `beforehanded` — that regex
+cannot split because the split point is only knowable from vocabulary. The
+splitter uses two dictionaries together (WordNet plus NLTK's 235k `words`
+list, since neither alone is complete: WordNet omits pronouns like
+`something`, the words list omits nothing but is over-permissive) and restricts
+to a **single split point**, matching the actual corruption. Guards keep it
+conservative: capitalized tokens are skipped (proper nouns no dictionary
+reliably holds, e.g. `Gaddon`), real words are never touched (`nightgowns`,
+`something` stay whole), and a split is accepted only when both halves are
+known words. For the target it additionally keeps only the piece beginning with
+the search prefix. This runs on both the target and the context.
+
+If NLTK or its corpora are not installed, the splitter degrades to a no-op —
+the pipeline still runs, it just leaves run-ons whole (still flagged in
+`ctx_bad_forms`). See Installation for the one-time corpus download.
+
+Context is cleaned the same way: `@` redaction runs are stripped, malformed
+tokens repaired, and run-ons split, before the passage is saved. Note that
+stripping a `@` run splices the two sides together — the result reads fluently
+but is missing the redacted words — so the `ctx_n_at` column records how many
+`@` tokens a window contained, keeping contaminated windows countable. Roughly
+a quarter of ±20-token windows intersect a redaction block.
 
 ---
 
@@ -227,6 +253,14 @@ The project is managed with [uv](https://docs.astral.sh/uv/) and pinned in
 
 ```bash
 uv sync
+```
+
+The run-on splitter in `coha_build.py` needs NLTK and three corpora. These are
+a one-time download (the splitter no-ops without them, so the pipeline still
+runs, just without run-on splitting):
+
+```bash
+uv run python -m nltk.downloader wordnet omw-1.4 words
 ```
 
 Run scripts through uv (uses the project environment automatically):
@@ -285,4 +319,4 @@ Run `uv sync` on the login node (which has network), not inside a batch job.
 The scripts above are the production pipeline. A second tier checks whether the
 results are real — noise floors, corpus-size bias, single-linkage chaining, and
 readable correspondence tables — documented separately in
-**`diagnostic\README.md`**.
+**`diagnostics\README.md`**.

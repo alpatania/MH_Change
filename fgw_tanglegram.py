@@ -322,17 +322,30 @@ def main():
             continue
         pair_matches[(d1, d2)] = get_pair_matches(T, args.top_k, args.min_mass_fraction)
 
-    all_words = sorted(set(
-        word for decade in decades for word in decade_meta[decade]["word"]
-    ))
-    palette = (px.colors.qualitative.Dark24 if len(all_words) <= 24
-              else px.colors.qualitative.Alphabet)
-    color_map = {w: palette[i % len(palette)] for i, w in enumerate(all_words)}
+    # Shared frequency-ranked Okabe-Ito colouring (see fgw_colors). Built from
+    # the same per-decade coords the sankey uses, keyed on the same cleaned
+    # 'word' value, so 'insane' is the identical colour in both figures.
+    from fgw_colors import build_color_map, color_for, OVERFLOW_GREY
+    color_map, legend_order = build_color_map(
+        [decade_meta[d] for d in decades], word_col="word")
+
+    # word ordering for the tanglegram's vertical layout: frequency rank (the
+    # legend order), with overflow words after, so colour bands read top-down
+    # by frequency.
+    all_words = list(legend_order) + sorted(
+        {str(w).strip().casefold()
+         for decade in decades for w in decade_meta[decade]["word"]
+         if str(w).strip()} - set(legend_order))
     word_rank = {w: i / max(1, len(all_words) - 1) for i, w in enumerate(all_words)}
+
+    def _wkey(v):
+        s = str(v).strip().casefold()
+        return s
 
     def word_target(decade: int) -> dict[int, float]:
         meta = decade_meta[decade]
-        return {i: word_rank.get(meta.iloc[i]["word"], 0.5) for i in range(decade_n[decade])}
+        return {i: word_rank.get(_wkey(meta.iloc[i]["word"]), 0.5)
+                for i in range(decade_n[decade])}
 
     def rebuild(decade: int, target: dict[int, float]):
         Z = decade_Z[decade]
@@ -473,9 +486,9 @@ def main():
                 x=[decade, x_apex, decade, decade],
                 y=[y_min, (y_min + y_max) / 2, y_max, y_min],
                 mode="lines", fill="toself",
-                fillcolor=color_map.get(dominant, "#888888"),
+                fillcolor=color_for(dominant, color_map),
                 opacity=0.35,
-                line=dict(color=color_map.get(dominant, "#888888"), width=1),
+                line=dict(color=color_for(dominant, color_map), width=1),
                 showlegend=False,
                 hoverinfo="text",
                 text=f"<b>collapsed: {len(leaves)} occurrences</b><br>"
@@ -499,7 +512,7 @@ def main():
         for word, bucket in segments_by_word.items():
             fig.add_trace(go.Scattergl(
                 x=bucket["x"], y=bucket["y"], mode="lines",
-                line=dict(color=color_map.get(word, "#888888"), width=1),
+                line=dict(color=color_for(word, color_map), width=1),
                 opacity=0.3, showlegend=False, hoverinfo="skip",
             ))
 
@@ -511,7 +524,7 @@ def main():
         for decade in decades:
             meta = decade_meta[decade]
             suppressed_leaves = decade_leaf_to_collapse[decade]
-            word_rows = meta[meta["word"] == word]
+            word_rows = meta[meta["word"].map(lambda v: str(v).strip().casefold()) == word]
             for orig_idx, row in word_rows.iterrows():
                 if orig_idx in suppressed_leaves:
                     continue
@@ -528,7 +541,7 @@ def main():
             continue
         fig.add_trace(go.Scattergl(
             x=xs, y=ys, mode="markers", name=word,
-            marker=dict(color=color_map[word], size=6,
+            marker=dict(color=color_for(word, color_map), size=6,
                        line=dict(color="white", width=0.5)),
             customdata=hover, hovertemplate="%{customdata}<extra></extra>",
         ))
