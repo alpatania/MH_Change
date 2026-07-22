@@ -53,10 +53,13 @@ base you choose.
 
 ```
 results/
+  _db/
+    corpus_search_1820.sqlite          # per-decade token DB, SHARED across
+    corpus_search_1830.sqlite          # all search terms (search-agnostic)
+    ...
   insan/
     insan_1820s_results.csv            # cleaned matches (what RoBERTa reads)
     insan_1820s_results_uncleaned.csv  # raw matches (provenance)
-    corpus_search_1820.sqlite          # per-decade token DB (reused across searches)
     insan_1820s_embeddings.npy         # raw 768-d vectors, one per occurrence
     insan_1820s_coords.csv             # 2-D coords + metadata (drives plots)
     insan_1820s_pca90.npy
@@ -319,4 +322,4 @@ Run `uv sync` on the login node (which has network), not inside a batch job.
 The scripts above are the production pipeline. A second tier checks whether the
 results are real — noise floors, corpus-size bias, single-linkage chaining, and
 readable correspondence tables — documented separately in
-**`diagnostics\README.md`**.
+**`diagnostics/README.md`**.

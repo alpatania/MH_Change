@@ -77,6 +77,12 @@ fi
 SEARCH_SLUG=$(printf '%s' "$SEARCH" | tr -c 'A-Za-z0-9_-' '_')
 BASE_DIR="${OUT_DIR:-.}"
 OUT_DIR="${BASE_DIR}/results/${SEARCH_SLUG}"
+# The SQLite token DBs are SEARCH-AGNOSTIC -- the same decade DB serves every
+# search term. Keep them in one shared folder rather than inside each search's
+# results dir, or a multi-term batch run rebuilds every decade DB once per
+# term (85 terms x 20 decades = 1700 full rebuilds instead of 20).
+DB_CACHE_DIR="${BASE_DIR}/results/_db"
+mkdir -p "$DB_CACHE_DIR"
 
 if [ ! -d "$DB_DIR" ]; then
   echo "ERROR: $DB_DIR is not a directory" >&2
@@ -134,7 +140,7 @@ for DECADE in $DECADES; do
       "${EXTRA_ARGS[@]}" \
       --search "$SEARCH" \
       --context "$CONTEXT" \
-      --sqlite "$OUT_DIR/corpus_search_${DECADE}.sqlite" \
+      --sqlite "$DB_CACHE_DIR/corpus_search_${DECADE}.sqlite" \
       --csv "$CSV" > "$LOG" 2>&1; then
     echo "  ok -- $(tail -n 1 "$LOG")"
   else

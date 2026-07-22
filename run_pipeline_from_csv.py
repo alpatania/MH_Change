@@ -1,16 +1,28 @@
 #!/usr/bin/env python3
 """Drive the full Sheaf-NLP pipeline from search_terms.csv.
 
-For every row in --terms-csv, this runs:
+For every row in --terms-csv, this runs the same four stages the README
+documents:
   1. run_all_decades.sh  --search <search_arg> [--pos-filter <pos>]
      (builds per-decade CSVs of matched contexts; reuses SQLite DBs
      across terms since DB content is search-agnostic)
   2. run_embedding_and_distance.sh  --search <slug>
-     (computes per-decade BERT embeddings + pairwise FGW distances)
+     (per-decade RoBERTa embeddings + pairwise FGW distances)
+  3. fgw_build_linkage.py --search <slug>
+     (single-linkage trees, required by the tanglegram)
+  4. fgw_tanglegram.py / fgw_sankey.py --search <slug>
+     (the two visualisations)
+
+Stages 3-4 can be skipped with --no-viz if you only want the numbers.
+
+PATHS: --out-dir is the BASE location, matching the shell scripts and the
+leaf Python scripts. Each stage writes to <out-dir>/results/<slug>/. The
+default is '.', i.e. ./results/<slug>/. Do NOT pass '--out-dir results' --
+that would produce results/results/<slug>/.
 
 Slug computation replicates run_all_decades.sh's SEARCH_SLUG rule
-(non-[A-Za-z0-9_-] characters replaced with '_') so that stage 2 finds
-the CSVs stage 1 produced. Passing the slug rather than the raw search
+(non-[A-Za-z0-9_-] characters replaced with '_') so that later stages find
+the files stage 1 produced. Passing the slug rather than the raw search
 to stage 2 is what makes phrase searches ('mental hospital') work.
 
 Optional --token-counts filters rows using the sweep output: only rows
@@ -28,17 +40,14 @@ Usage:
       --db-dir coha-db-003 \\
       --lexicon-txt coha-lexicon.txt \\
       --sources-txt coha-sources.txt \\
-      --out-dir results \\
+      [--out-dir .] \\
       [--genre acad] [--context 20] \\
       [--alpha 0.5] [--mass 0.8] \\
-      [--stage1-script ./run_all_decades.sh] \\
-      [--stage2-script ./run_embedding_and_distance.sh] \\
-      [--coha-script ./coha_build.py] \\
-      [--embed-script ./final_layer_embeddings.py] \\
-      [--fgw-script ./FGW_distance.py] \\
-      [--limit N]  # only process first N surviving terms (for pilots)
-      [--dry-run]  # print planned invocations, do not execute
-      [--stage1-only]  # skip stage 2 (embeddings + FGW)
+      [--struct-suffix _pca90_umap.npy] [--struct-metric cosine] \\
+      [--no-viz]     # skip stages 3-4
+      [--limit N]    # only process first N surviving terms (for pilots)
+      [--dry-run]    # print planned invocations, do not execute
+      [--stage1-only]  # skip stages 2-4
       [--rebuild-db]   # force stage 1 DB rebuild on first term
 """
 
@@ -145,7 +154,10 @@ def main() -> int:
     p.add_argument("--db-dir", type=Path, required=True)
     p.add_argument("--lexicon-txt", type=Path, required=True)
     p.add_argument("--sources-txt", type=Path, required=True)
-    p.add_argument("--out-dir", type=Path, default=Path("results"))
+    p.add_argument("--out-dir", type=Path, default=Path("."),
+                   help="BASE location; each stage writes to "
+                        "<out-dir>/results/<slug>/ (default: '.'). Do not "
+                        "pass 'results' -- that yields results/results/<slug>/.")
     p.add_argument("--genre", default=None)
     p.add_argument("--context", type=int, default=20)
 
@@ -156,6 +168,23 @@ def main() -> int:
     p.add_argument("--embed-script", type=Path,
                    default=Path("./final_layer_embeddings.py"))
     p.add_argument("--fgw-script", type=Path, default=Path("./FGW_distance.py"))
+    p.add_argument("--linkage-script", type=Path,
+                   default=Path("./fgw_build_linkage.py"))
+    p.add_argument("--tanglegram-script", type=Path,
+                   default=Path("./fgw_tanglegram.py"))
+    p.add_argument("--sankey-script", type=Path, default=Path("./fgw_sankey.py"))
+    p.add_argument("--no-viz", action="store_true",
+                   help="Skip stages 3-4 (linkage + tanglegram + sankey); "
+                        "run only the CSVs, embeddings and FGW distances.")
+    p.add_argument("--struct-suffix", default="_pca90_umap.npy",
+                   help="Passed to stage 2 as --struct-suffix (FGW Path B). "
+                        "Set to '' to run Path A. Default matches the README.")
+    p.add_argument("--struct-metric", default="cosine",
+                   help="Passed to stage 2 as --struct-metric when "
+                        "--struct-suffix is non-empty.")
+    p.add_argument("--metric", default="cosine",
+                   help="Metric for the linkage step; must match the metric "
+                        "used for the FGW ultrametrics.")
 
     p.add_argument("--alpha", type=float, default=0.5)
     p.add_argument("--mass", type=float, default=0.8)
@@ -193,6 +222,7 @@ def main() -> int:
         "surface_form", "search_arg", "slug", "pos_filter", "kind",
         "idiom_family", "n_decades_pass", "stage1_status",
         "stage1_seconds", "stage2_status", "stage2_seconds",
+        "viz_status", "viz_seconds",
         "stage1_log", "stage2_log",
     ]
     if args.dry_run:
@@ -261,13 +291,19 @@ def main() -> int:
             stage2_cmd = [
                 "bash", str(args.stage2_script),
                 "--search", slug,
-                "--csv-dir", str(args.out_dir),
                 "--out-dir", str(args.out_dir),
                 "--embed-script", str(args.embed_script),
                 "--fgw-script", str(args.fgw_script),
                 "--alpha", str(args.alpha),
                 "--mass", str(args.mass),
+                "--metric", str(args.metric),
             ]
+            # FGW Path B, matching the README's manual invocation. Without
+            # this, batch runs would silently use Path A and produce a
+            # different structure term than manual runs.
+            if args.struct_suffix:
+                stage2_cmd += ["--struct-suffix", args.struct_suffix,
+                               "--struct-metric", args.struct_metric]
             stage2_ok, stage2_secs = run_command(
                 stage2_cmd, stage2_log, args.dry_run, "stage2")
             if stage2_ok:
@@ -277,6 +313,77 @@ def main() -> int:
                 stage2_status = "failed"
                 print(f"  stage2 FAILED (see {stage2_log})", file=sys.stderr)
                 failed.append((search_arg, "stage2", str(stage2_log)))
+
+        # --- Stages 3-4: linkage matrices, then the two visualisations.
+        # Gated on stage 2, because all three read the embeddings/coords it
+        # produces. The tanglegram additionally requires stage 3's linkages,
+        # so a linkage failure skips the tanglegram but not the sankey.
+        viz_status = "skipped"
+        viz_secs = 0.0
+        if args.no_viz or args.stage1_only:
+            viz_status = "skipped"
+        elif stage2_ok is False and not args.dry_run:
+            viz_status = "skipped_stage2_failed"
+            print("  viz skipped (stage2 failed)")
+        elif stage2_ok or args.dry_run:
+            viz_log = driver_log_dir / f"{slug}_viz.log"
+            viz_ok = True
+
+            linkage_cmd = [
+                sys.executable, str(args.linkage_script),
+                "--search", slug,
+                "--out-dir", str(args.out_dir),
+                "--metric", str(args.metric),
+            ]
+            link_ok, link_secs = run_command(
+                linkage_cmd, driver_log_dir / f"{slug}_linkage.log",
+                args.dry_run, "linkage")
+            viz_secs += link_secs
+            if link_ok:
+                print(f"  linkage ok ({link_secs:.1f}s)")
+            else:
+                print(f"  linkage FAILED (see {slug}_linkage.log)",
+                      file=sys.stderr)
+                failed.append((search_arg, "linkage",
+                               str(driver_log_dir / f"{slug}_linkage.log")))
+                viz_ok = False
+
+            # Tanglegram needs the linkages; skip it if they failed.
+            if link_ok or args.dry_run:
+                tang_cmd = [
+                    sys.executable, str(args.tanglegram_script),
+                    "--search", slug,
+                    "--out-dir", str(args.out_dir),
+                ]
+                t_ok, t_secs = run_command(
+                    tang_cmd, driver_log_dir / f"{slug}_tanglegram.log",
+                    args.dry_run, "tanglegram")
+                viz_secs += t_secs
+                print(f"  tanglegram {'ok' if t_ok else 'FAILED'} "
+                      f"({t_secs:.1f}s)")
+                if not t_ok:
+                    failed.append((search_arg, "tanglegram",
+                                   str(driver_log_dir / f"{slug}_tanglegram.log")))
+                    viz_ok = False
+
+            # Sankey reads coords + transport matrices, not linkages, so it
+            # runs even if the linkage step failed.
+            sankey_cmd = [
+                sys.executable, str(args.sankey_script),
+                "--search", slug,
+                "--out-dir", str(args.out_dir),
+            ]
+            s_ok, s_secs = run_command(
+                sankey_cmd, driver_log_dir / f"{slug}_sankey.log",
+                args.dry_run, "sankey")
+            viz_secs += s_secs
+            print(f"  sankey {'ok' if s_ok else 'FAILED'} ({s_secs:.1f}s)")
+            if not s_ok:
+                failed.append((search_arg, "sankey",
+                               str(driver_log_dir / f"{slug}_sankey.log")))
+                viz_ok = False
+
+            viz_status = "ok" if viz_ok else "failed"
 
         if manifest_writer is not None:
             manifest_writer.writerow({
@@ -291,12 +398,15 @@ def main() -> int:
                 "stage1_seconds": f"{stage1_secs:.1f}",
                 "stage2_status": stage2_status,
                 "stage2_seconds": f"{stage2_secs:.1f}",
+                "viz_status": viz_status,
+                "viz_seconds": f"{viz_secs:.1f}",
                 "stage1_log": str(stage1_log),
                 "stage2_log": str(stage2_log),
             })
             manifest_file.flush()
 
-        if stage1_ok and (args.stage1_only or stage2_ok):
+        if stage1_ok and (args.stage1_only or stage2_ok) and \
+                viz_status in ('ok', 'skipped'):
             n_ok += 1
 
     if manifest_file is not None:

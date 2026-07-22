@@ -45,12 +45,25 @@ from pathlib import Path
 
 # Reuse the exact same prefix_bounds the pipeline uses. Sys-path hack so we
 # can import from the user's coha_build.py without moving files around.
+# Reuse the exact same prefix_bounds the pipeline uses, so the counts here are
+# what find_matches would actually return. This script normally lives in
+# diagnostics/ while coha_build.py sits in the project root, so BOTH the script
+# dir and its parent go on sys.path -- searching only the script dir would fail
+# silently into the fallback below and risk drifting from the real matcher.
 _here = Path(__file__).resolve().parent
-sys.path.insert(0, str(_here))
+for _candidate in (_here, _here.parent):
+    if str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
 try:
     from coha_build import prefix_bounds
 except ImportError:
     # Fallback: inline reimplementation. Must match coha_build.py exactly.
+    # If you hit this, the counts are still produced but are no longer
+    # guaranteed to track coha_build -- check that the two agree.
+    print("WARNING: could not import prefix_bounds from coha_build.py; "
+          "using an inline copy that may drift from the real matcher.",
+          file=sys.stderr)
+
     def prefix_bounds(value: str) -> tuple[str, str]:
         value = value.casefold()
         return value, value + "\U0010ffff"
